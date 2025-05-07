@@ -206,11 +206,15 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         - non_cgt_tax_(aud): Tax on non-CGT income
         - cgt_tax_(aud): Tax on capital gains
     """
+
     if tax_rates is None:
         tax_rates = defaultTaxRates()
 
     # Calculate CGT amount from trades
-    cgt_aud = year_trades["cgt_amount_(AUD)"].sum()
+    if year_trades.empty:
+        cgt_aud = 0
+    else:
+        cgt_aud = year_trades["cgt_amount_(AUD)"].sum()
     
     # Calculate total taxable income
     gross_taxable_income = income + cgt_aud
@@ -313,9 +317,14 @@ def run_backtest_with_tax(
 
     # Initialize variables
     portfolio_value = pd.Series(index=price.index, dtype=float)
+    portfolio_value_taxed = pd.Series(index=price.index, dtype=float)
     cgt_tax_payments = pd.Series(0, index=years, dtype=float)
     current_cash = init_cash
     current_assets = 0
+    
+    # Dictionary to store values by year for final assembly
+    portfolio_values_by_year = {}
+    portfolio_values_taxed_by_year = {}
 
     fys = []
     print(f"Backtest price data runs from: {price.index[0]} to {price.index[-1]}, years: {years}")
@@ -348,24 +357,34 @@ def run_backtest_with_tax(
         year_mask = (price.index >= start_date) & (price.index <= end_date)
         fys.append(price.index[year_mask])
         print(f"For financial year: {year}\nStart date: {fys[i][0]}\nEnd date: {fys[i][-1]}")
-  
+    
+    order_at_start_of_year = np.nan
+    end_value = init_cash
+    all_trades = pd.DataFrame()
+    all_orders = pd.DataFrame()
+
     # Run backtest for each year
     for i, fy in enumerate(fys):
         # Get data for this year
         # For Australian financial year (July 1st to June 30th)
         # If month is before July, it belongs to previous financial year
-        year_price = price[fy]
-        year_orders = orders[fy]
         year_aud = aud[fy]
         year = fy[-1].year
-        print(f"Running backtest for financial year: {year}")
+        year_price = price[fy]
+        year_orders = orders[fy]
+
+        print(f"\n\nRunning backtest for financial year: {year}")
+        if not pd.isna(order_at_start_of_year):
+            year_orders = pd.concat([pd.Series(order_at_start_of_year, index=[year_price.index[0]]), year_orders.iloc[1:]])
+            print(f"Added order at start of year {year}: {order_at_start_of_year}, year_orders: \n{year_orders.head()}")
 
         # Run backtest for this year
-        print(f"Current cash: {current_cash}, current assets: {current_assets}")
+        print(f"Current cash: {current_cash}, current assets: {current_assets}, current value: {end_value}")
         pf = vbt.Portfolio.from_orders(
             year_price,
-            year_orders,
-            init_cash=current_cash,
+            size = year_orders,
+            size_type = 'target_percent',
+            init_cash=end_value,
             freq=freq
         )
 
@@ -394,9 +413,15 @@ def run_backtest_with_tax(
         
         print(f"Tax result for year {year}: {tax_result}")
         # Update portfolio value and tax payments
-        portfolio_value[year_mask] = pf.value()
-        cgt_tax_payments[year] = tax_result['cgt_tax_(aud)']  # Add tax at year end
+        portfolio_values_by_year[year] = pf.value()
+        cgt_tax_payments.loc[year] = tax_result['cgt_tax_(aud)']  # Add tax at year end
         print(f"Paid total tax for {year} of {tax_result['total_tax_aud']} of which {cgt_tax_payments[year]} was CGT tax")
+        
+        # Store tax-adjusted values for this year
+        tax_adjusted_values = pf.value().copy()
+        # Adjust the final value to account for tax payment
+        tax_adjusted_values.iloc[-1] -= tax_result['cgt_tax_(aud)']
+        portfolio_values_taxed_by_year[year] = tax_adjusted_values
         
         # Get end of year values
         end_cash = pf.cash()[-1]
@@ -409,24 +434,42 @@ def run_backtest_with_tax(
             # If we have enough cash, just deduct the tax
             current_cash = end_cash - cgt_tax
             current_assets = end_assets
+            end_value = current_cash + (current_assets * end_price)
         else:
             # If we don't have enough cash, sell assets to pay tax
             assets_to_sell = (cgt_tax - end_cash) / end_price
             current_assets = end_assets - assets_to_sell
             current_cash = 0.01  # Magic 1 cent tax refund
+            end_value = current_cash + (current_assets * end_price)
             
         print(f"Current cash at end of year loop: {current_cash}, current assets: {current_assets}")
-        
+        all_trades = pd.concat([all_trades, trades_df], axis = 0)
+        all_orders = pd.concat([all_orders, pf.orders.records], axis = 0)
+
         # If we have assets and there's a next year, add a buy order at start of next year
         if i < len(fys) - 1 and current_assets > 0:
             next_year_start = fys[i+1][0]
-            # Create a buy order for the first day of next year
-            buy_order = pd.Series(current_assets, index=[next_year_start])
-            # Add this buy order to the start of next year's orders
-            year_orders = pd.concat([buy_order, year_orders[1:]])
+            # Calculate portfolio value at start of next year
+            next_year_start_price = price.loc[next_year_start]
+            portfolio_value_at_start = current_cash + (current_assets * next_year_start_price)
+            
+            # Calculate what percentage of portfolio value would give us the same number of assets
+            target_percent = (current_assets * next_year_start_price) / portfolio_value_at_start
+            
+            # Create a target percentage order for the first day of next year
+            order_at_start_of_year = target_percent
+         
+    # Combine all year's portfolio values into one series
+    for i, year in enumerate(years):
+        year_mask = (price.index >= fys[i][0]) & (price.index <= fys[i][-1])
+        if year in portfolio_values_by_year:
+            portfolio_value.loc[year_mask] = portfolio_values_by_year[year]
+            portfolio_value_taxed.loc[year_mask] = portfolio_values_taxed_by_year[year]
+    
     # Create a simulated asset price series from the tax-adjusted portfolio value
     # We'll use this to create a regular Portfolio
     simulated_price = portfolio_value.copy()
+    simulated_price_taxed = portfolio_value_taxed.copy()
     
     # Create a regular Portfolio from the simulated price series
     # We'll use from_holding since we already have the value series
@@ -436,9 +479,21 @@ def run_backtest_with_tax(
         freq=freq
     )
     
-    details = {"portfolio_value": portfolio_value, "tax_payments": cgt_tax_payments, "trades_df": trades_df, 
-               "current_cash": current_cash, "current_assets": current_assets}
-    return pf_tax, details
+    # Create a tax-adjusted portfolio
+    pf_tax_adjusted = vbt.Portfolio.from_holding(
+        simulated_price_taxed,
+        init_cash=init_cash,
+        freq=freq
+    )
+    
+    details = {"portfolio_value": portfolio_value, 
+               "portfolio_value_taxed": portfolio_value_taxed,
+               "tax_payments": cgt_tax_payments, 
+               "all_trades": all_trades, 
+               "current_cash": current_cash, 
+               "current_assets": current_assets,
+               "all_orders": all_orders}
+    return pf_tax, pf_tax_adjusted, details
 
 if __name__ == "__main__":
     income = [91000, 93000, 96000, 103000, 112000, 117000]

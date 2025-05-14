@@ -1,10 +1,10 @@
 from typing import Union
 import os
-import sys
 import pandas as pd
 import vectorbt as vbt
 import numpy as np
 import plotly.graph_objects as go
+from typing import Literal
 
 fdel = os.path.sep
 wd = os.path.dirname(__file__)  ## This gets the working directory which is the folder where you have placed this .py file. 
@@ -18,29 +18,40 @@ wd = os.path.dirname(__file__)  ## This gets the working directory which is the 
     #     'VAMS signal dependent sizing': cpf_fo
     # }
 
-def plot_portfolios(portfolios: dict):
+def plot_portfolios(portfolios: dict, return_fig: bool = False, title: str = "Portfolio Value comparison", 
+                    annotation: str = " ", ann_box_pos: tuple = (0.4, 0.98)):
     """Compare the value curves of multiple portfolios.
 
     **Parameters:**
     - portfolios: dict - A dictionary of portfolio objects to compare. The keys are the names of the portfolios and the values are the portfolio objects.
+    - title: str - The title of the plot.
+    - annotation: str - The subtitle of the plot.
     """
     # Create figure
     fig = go.Figure()
+    # Add subtitle by creating a figure with layout that includes both title and subtitle
 
     for name, pf in portfolios.items():
+        if isinstance(pf, vbt.Portfolio):
+            x=pf.value().index; y=pf.value().values
+        elif isinstance(pf, pd.Series):
+            x = pf.index; y = pf.values
+        else:
+            print(f"Unknown portfolio type: {type(pf)}")
+            continue
+
         fig.add_trace(
             go.Scatter(
-                x=pf.value().index,
-                y=pf.value().values,
+                x=x,
+                y=y,
                 name=name,
                 mode='lines',
                 line=dict(width=1.5)
-            )
-        )
+            ))
 
     # Update layout with horizontal legend at bottom
     fig.update_layout(
-        title='BTC Trading using 42 MACRO VAMS Signal',
+        title=title,
         yaxis_title='Portfolio Value ($)',
         template='plotly_white',
         width=1200,
@@ -57,9 +68,86 @@ def plot_portfolios(portfolios: dict):
         )
     )
 
-    # Show the figure
-    fig.show()
+    if return_fig:
+        return fig
+    else:
+        fig.show()
 
+def plot_timeseries_with_vlines(price_series, vline_dict=None, title='Time Series with Event Lines', 
+                              width=1000, height=500, y_axis_title='Value'):
+    """Plot a time series with vertical lines at specified dates using Plotly.
+    
+    Parameters:
+    -----------
+    price_series : pd.Series
+        Time series data to plot with datetime index
+    vline_dict : dict, optional
+        Dictionary with keys as color names and values as pd.Series with datetime indices
+        Example: {'red': pd.Series(index=[dt1, dt2]), 'green': pd.Series(index=[dt3, dt4])}
+    title : str, optional
+        Title for the plot
+    width : int, optional
+        Width of the plot in pixels
+    height : int, optional
+        Height of the plot in pixels
+    y_axis_title : str, optional
+        Title for the y-axis
+        
+    Returns:
+    --------
+    plotly.graph_objects.Figure
+        Interactive Plotly figure
+    """
+    # Create the main figure
+    fig = go.Figure()
+    
+    # Add the main time series line
+    fig.add_trace(
+        go.Scatter(
+            x=price_series.index,
+            y=price_series.values,
+            mode='lines',
+            name=price_series.name if hasattr(price_series, 'name') else 'Series',
+            line=dict(width=2)
+        )
+    )
+    
+    # Add vertical lines if provided
+    if vline_dict is not None:
+        for color, date_series in vline_dict.items():
+            # Get datetime indices
+            dates = date_series.to_list()
+            
+            # Add vertical lines for each date
+            for date in dates:
+                fig.add_shape(
+                    type="line",
+                    x0=date,
+                    x1=date,
+                    y0=0,
+                    y1=1,
+                    yref="paper",
+                    line=dict(
+                        color=color,
+                        width=1.5,
+                        dash="dash",
+                    )
+                )
+    
+    # Update layout
+    fig.update_layout(
+        title=title,
+        xaxis_title='Date',
+        yaxis_title=y_axis_title,
+        template='plotly_white',
+        width=width,
+        height=height,
+        showlegend=True,
+        hovermode='x unified',
+        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5)
+    )
+    
+    return fig
 
 #FUNCTIONS #########################################################################################################################
 def defaultTaxRates() -> pd.DataFrame:
@@ -68,13 +156,64 @@ def defaultTaxRates() -> pd.DataFrame:
     # print(taxRates)
     return taxRates
 
-def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series) -> pd.DataFrame:
+# def fuse_trade_records(open_position: pd.DataFrame, closed_trades: pd.DataFrame) -> pd.DataFrame:
+#     """ Take the open position dataframe which is the trade record for the open position from last year and fuse it with the close of that trade this year. 
+#     Only works for a single open position. This assumes the backtest has been run, using .from_orders with size_type = "targetpercent" and portfolio is always all in or all out of market & only a single asset is being traded.
+    
+#     Parameters:
+#     -----------
+#     open_position : pd.DataFrame
+#         The open position from the previous year(s)
+#     closed_trades : pd.DataFrame
+#         The closed trades for the current year
+#     trade_type : Literal["pf_records", "trades_df"]
+#         The type of records being fused
+        
+#     Returns:
+#     --------
+#     pd.DataFrame
+#         The fused trade records
+#     """
+#     if open_position.empty or closed_trades.empty:
+#         return closed_trades
+        
+#     print(f"Fusing trades dataframe, {open_position.iloc[0]} with {closed_trades.iloc[0]}")
+#     # For trades dataframe, we need to update more fields
+#     # Use .loc to avoid SettingWithCopyWarning
+#     closed_trades.loc[closed_trades.index[0], "entry_date"] = open_position["entry_date"]
+#     closed_trades.loc[closed_trades.index[0], "entry_price"] = open_position["entry_price"]
+#     closed_trades.loc[closed_trades.index[0], "entry_idx"] = open_position["entry_idx"]
+    
+#     # Calculate total duration including previous years
+#     total_duration = closed_trades.iloc[0]["duration_(days)"] + open_position["duration_(days)"]
+#     closed_trades.iloc[0]["duration_(days)"] = total_duration
+    
+#     # Update PnL and CGT amounts
+#     closed_trades.iloc[0]["pnl_(USD)"] += open_position["pnl_(USD)"]
+#     closed_trades.iloc[0]["pnl_(AUD)"] += open_position["pnl_(AUD)"]
+    
+#     # Recalculate return based on total duration and total PnL
+#     closed_trades.iloc[0]["return_(%)"] = ((closed_trades.iloc[0]["exit_price"] - closed_trades.iloc[0]["entry_price"])/closed_trades.iloc[0]["entry_price"]) * 100
+    
+#     # Update CGT rate based on total duration
+#     if total_duration > 365 and closed_trades.iloc[0]["pnl_(AUD)"] > 0:
+#         closed_trades.iloc[0]["cgt_rate"] = 0.5
+#     else:
+#         closed_trades.iloc[0]["cgt_rate"] = 1.0
+        
+#     # Recalculate CGT amount with updated rate
+#     closed_trades.iloc[0]["cgt_amount_(AUD)"] = closed_trades.iloc[0]["pnl_(AUD)"] * closed_trades.iloc[0]["cgt_rate"]
+        
+#     return closed_trades
+
+def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series, signal: pd.Series) -> pd.DataFrame:
     """ Add more info to the trades dataframe from a Portfolio backtest object.
 
     **Parameters:**
     - pf: vbt.Portfolio - The portfolio object to get the trades from.
     - price: pd.Series - The price series used for the backtest.
     - aud: pd.Series - The USD/AUD price history for conversion of pnl to AUD.
+    - signal: pd.Series - The signal series used for the backtest.
 
     **Returns:**
     - pd.DataFrame - The trades dataframe with more info.
@@ -89,12 +228,12 @@ def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series) -> pd.
     trades["return"] *= 100
     trades["duration_(days)"] = (trades['exit_date'] - trades['entry_date']).dt.days
     trades.rename(columns={"return": "return_(%)", "pnl": "pnl_(USD)"}, inplace=True)
+    trades["signal"] = signal.loc[trades["exit_date"]].values
+    trades["pay_cgt"] = trades["signal"].apply(lambda x: "pay" if x == 0 else "defer")
     
     # Debug information
     print(f"Number of trades: {len(trades)}")
     print(f"Price date range: {price.index[0]} to {price.index[-1]}")
-    print(f"AUD date range: {aud.index[0]} to {aud.index[-1]}")
-    print(f"Trades date range: {trades['exit_date'].min()} to {trades['exit_date'].max()}")
     
     # Check if we have AUD data for all trade dates
     missing_dates = trades['exit_date'][~trades['exit_date'].isin(aud.index)]
@@ -184,12 +323,14 @@ def tax_calc(trades: pd.DataFrame,
     fy_totals["cgt_tax_(aud)"] = pd.Series([tax[1] for tax in taxcomps], index=fy_totals.index)
     return fy_totals
 
-def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud: float, deductions: float = 0, tax_rates: pd.DataFrame = None) -> pd.Series:
+def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud: float,
+                    previous_cg_loss: float = 0, deductions: float = 0, tax_rates: pd.DataFrame = None) -> pd.Series:
     """Calculate the tax to pay for a single financial year from CGT and non-CGT income.
     
     **Parameters:**
     - year: int - The financial year (e.g. 2021 for 2020-21) - the year is the year the tax is paid.
     - income: float - Non-CGT income in AUD
+    - previous_cg_loss: float - Capital loss that can be carried forward from previous years.
     - year_trades: pd.DataFrame - Trades dataframe from a vbt.Portfolio backtest for that year.
     - usdaud: float - USD/AUD exchange rate to convert capital gains to AUD on the tax payment date.
     - deductions: float - Total tax deductions in AUD
@@ -197,6 +338,7 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
     
     **Returns:**
     - pd.Series - Tax information for the year with the following index:
+    
         - cgt_amount_(AUD): Capital gains amount in AUD
         - gross_taxable_income_(AUD): Total taxable income
         - gross_deductions_(AUD): Total deductions
@@ -205,6 +347,7 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         - taxed_(% of gross income): Tax as percentage of gross income
         - non_cgt_tax_(aud): Tax on non-CGT income
         - cgt_tax_(aud): Tax on capital gains
+        - capital_loss_carryforward_(AUD): Amount of capital loss that can be carried forward to next year
     """
 
     if tax_rates is None:
@@ -213,44 +356,156 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
     # Calculate CGT amount from trades
     if year_trades.empty:
         cgt_aud = 0
+        capital_loss_carryforward = previous_cg_loss
     else:
         cgt_aud = year_trades["cgt_amount_(AUD)"].sum()
+        # Store the original CGT amount for carryforward calculation
+        capital_loss_carryforward = abs(cgt_aud) + previous_cg_loss if cgt_aud < 0 else 0
     
-    # Calculate total taxable income
-    gross_taxable_income = income + cgt_aud
-    net_taxable_income = gross_taxable_income - deductions
-    
-    # Find applicable tax bracket
-    bracket_row = tax_rates.loc[
-        (tax_rates.index == year) & 
-        (tax_rates["bracket_min_aud"] <= net_taxable_income) &
-        ((tax_rates["bracket_max_aud"].isna()) | (net_taxable_income <= tax_rates["bracket_max_aud"]))
-    ].iloc[0]
-    
-    # Calculate tax
-    base_tax = bracket_row["base_tax_aud"]
-    tax_rate = bracket_row["tax_rate_(%)"]
-    bracket_min = bracket_row["bracket_min_aud"]
-    
-    total_tax = base_tax + (net_taxable_income - bracket_min) * (tax_rate/100)
-    
-    # Split tax between CGT and non-CGT income
-    non_cgt_tax = (income/gross_taxable_income) * total_tax
-    cgt_tax = total_tax - non_cgt_tax
+    print(f"Single year tax calc, CGT amount to pay: {cgt_aud} AUD.\nCapital loss carryforward: {capital_loss_carryforward} AUD")
+    # Handle negative CGT
+    if cgt_aud < 0:
+        # For negative CGT, set CGT-related values to 0
+        cgt_tax = 0
+        # Calculate tax only on non-CGT income
+        gross_taxable_income = income
+        net_taxable_income = gross_taxable_income - deductions
+        
+        # Find applicable tax bracket
+        bracket_row = tax_rates.loc[
+            (tax_rates.index == year) & 
+            (tax_rates["bracket_min_aud"] <= net_taxable_income) &
+            ((tax_rates["bracket_max_aud"].isna()) | (net_taxable_income <= tax_rates["bracket_max_aud"]))
+        ].iloc[0]
+        
+        # Calculate tax
+        base_tax = bracket_row["base_tax_aud"]
+        tax_rate = bracket_row["tax_rate_(%)"]
+        bracket_min = bracket_row["bracket_min_aud"]
+        
+        total_tax = base_tax + (net_taxable_income - bracket_min) * (tax_rate/100)
+        non_cgt_tax = total_tax  # All tax is from non-CGT income
+    else:
+        # Calculate total taxable income
+        deductions += previous_cg_loss
+        gross_taxable_income = income + cgt_aud
+        net_taxable_income = gross_taxable_income - deductions
+        
+        # Find applicable tax bracket
+        bracket_row = tax_rates.loc[
+            (tax_rates.index == year) & 
+            (tax_rates["bracket_min_aud"] <= net_taxable_income) &
+            ((tax_rates["bracket_max_aud"].isna()) | (net_taxable_income <= tax_rates["bracket_max_aud"]))
+        ].iloc[0]
+        
+        # Calculate tax
+        base_tax = bracket_row["base_tax_aud"]
+        tax_rate = bracket_row["tax_rate_(%)"]
+        bracket_min = bracket_row["bracket_min_aud"]
+        
+        total_tax = base_tax + (net_taxable_income - bracket_min) * (tax_rate/100)
+        
+        # Split tax between CGT and non-CGT income
+        non_cgt_tax = (income/gross_taxable_income) * total_tax
+        cgt_tax = total_tax - non_cgt_tax
     
     # Create result series
     result = pd.Series({
         "cgt_amount_(AUD)": cgt_aud,
+        "salary_income_(AUD)": income,
         "gross_taxable_income_(AUD)": gross_taxable_income,
         "gross_deductions_(AUD)": deductions,
         "net_taxable_income_(AUD)": net_taxable_income,
+        "tax_bracket": bracket_row["bracket"],
+        "bracket_min_(aud)": bracket_row["bracket_min_aud"],
+        "base_tax_(aud)": base_tax,
+        "tax_rate_(%)": tax_rate,
         "total_tax_aud": total_tax,
         "taxed_(% of gross income)": (total_tax / gross_taxable_income) * 100,
         "non_cgt_tax_(aud)": non_cgt_tax,
-        "cgt_tax_(aud)": cgt_tax
+        "cgt_tax_(aud)": cgt_tax,
+        "non_cgt_tax_(% of total tax)": (non_cgt_tax / total_tax) * 100 if total_tax > 0 else 0,
+        "cgt_tax_(% of total tax)": (cgt_tax / total_tax) * 100 if total_tax > 0 else 0,
+        "cgt_tax_paid_(usd)": cgt_tax / usdaud,
+        "capital_loss_carryforward_(AUD)": capital_loss_carryforward
     })
     
     return result
+
+def calculate_trade_statistics(trades_df):
+    """
+    Calculate trade statistics from a trades DataFrame.
+    
+    Parameters:
+    -----------
+    trades_df : pd.DataFrame
+        DataFrame containing trade records with at least 'return_(%)' and 'duration_(days)' columns
+        
+    Returns:
+    --------
+    dict
+        Dictionary with trade statistics
+    """
+
+    if trades_df.empty:
+        return {
+            'Win Rate [%]': float('nan'),
+            'Best Trade [%]': float('nan'),
+            'Worst Trade [%]': float('nan'),
+            'Avg Winning Trade [%]': float('nan'),
+            'Avg Losing Trade [%]': float('nan'),
+            'Avg Winning Trade Duration': pd.NaT,
+            'Avg Losing Trade Duration': pd.NaT,
+            'Profit Factor': float('nan'),
+            'Expectancy': float('nan'),
+            "Total Trades": len(trades_df),
+            "Total Closed Trades": len(trades_df),
+            "Total Open Trades": 0}
+    
+    # Calculate win rate
+    winning_trades = trades_df[trades_df['pnl_(USD)'] > 0]
+    losing_trades = trades_df[trades_df['pnl_(USD)'] < 0]
+    win_rate = len(winning_trades) / len(trades_df) * 100 if len(trades_df) > 0 else 0
+    
+    # Best and worst trades
+    best_trade = trades_df['return_(%)'].max() if not trades_df.empty else float('nan')
+    worst_trade = trades_df['return_(%)'].min() if not trades_df.empty else float('nan')
+    
+    # Average winning and losing trades
+    avg_winning_trade = winning_trades['return_(%)'].mean() if not winning_trades.empty else float('nan')
+    avg_losing_trade = losing_trades['return_(%)'].mean() if not losing_trades.empty else float('nan')
+    
+    # Average durations
+    avg_winning_duration = winning_trades['duration_(days)'].mean() if not winning_trades.empty else pd.NaT
+    avg_losing_duration = losing_trades['duration_(days)'].mean() if not losing_trades.empty else pd.NaT
+    
+    # Profit factor (gross profits / gross losses)
+    gross_profits = winning_trades['pnl_(USD)'].sum() if not winning_trades.empty else 0
+    gross_losses = abs(losing_trades['pnl_(USD)'].sum()) if not losing_trades.empty else 0
+    profit_factor = gross_profits / gross_losses if gross_losses != 0 else float('nan')
+    
+    # Expectancy: (Win% * Avg Win) - (Loss% * Avg Loss)
+    win_percent = len(winning_trades) / len(trades_df) if len(trades_df) > 0 else 0
+    loss_percent = len(losing_trades) / len(trades_df) if len(trades_df) > 0 else 0
+    
+    avg_win_amount = winning_trades['pnl_(USD)'].mean() if not winning_trades.empty else 0
+    avg_loss_amount = abs(losing_trades['pnl_(USD)'].mean()) if not losing_trades.empty else 0
+    
+    expectancy = (win_percent * avg_win_amount) - (loss_percent * avg_loss_amount)
+    
+    return {
+        'Win Rate [%]': win_rate,
+        'Best Trade [%]': best_trade,
+        'Worst Trade [%]': worst_trade,
+        'Avg Winning Trade [%]': avg_winning_trade,
+        'Avg Losing Trade [%]': avg_losing_trade,
+        'Avg Winning Trade Duration': avg_winning_duration,
+        'Avg Losing Trade Duration': avg_losing_duration,
+        'Profit Factor': profit_factor,
+        'Expectancy': expectancy,
+        "Total Trades": len(trades_df),
+        "Total Closed Trades": len(trades_df),
+        "Total Open Trades": 0}
 
 def run_backtest_with_tax(
     price: pd.Series,
@@ -260,7 +515,9 @@ def run_backtest_with_tax(
     income: Union[float, list],
     deductions: Union[float, list] = 0,
     tax_rates: pd.DataFrame = None,
-    freq: str = '1D'
+    freq: str = '1D',
+    exit_at_end: bool = False,
+    pay_final_tax_at_end: bool = False
 ) -> vbt.Portfolio:
     """
     Run a backtest with tax calculations.
@@ -285,12 +542,20 @@ def run_backtest_with_tax(
         Tax rates to use. If None, uses default Australian tax rates.
     freq : str, optional
         Frequency of the data. Default is '1D'.
-        
+    exit_at_end : bool, optional
+        If True, exit all positions at the end of the backtest. Default is False.
+    pay_final_tax_at_end : bool, optional
+        If True, pay the tax for the final year at the end of the backtest. Default is False.
+
     Returns
     -------
-    vbt.Portfolio
-        A Portfolio object representing the tax-adjusted performance
+    tuple
+        (non_taxed_portfolio, taxed_portfolio, details_dict)
+        - non_taxed_portfolio: vbt.Portfolio without tax adjustments
+        - taxed_portfolio: vbt.Portfolio with tax adjustments
+        - details_dict: Dictionary containing additional information
     """
+
     # Align date ranges
     common_dates = price.index.intersection(aud.index)
     if len(common_dates) < len(price.index):
@@ -315,16 +580,35 @@ def run_backtest_with_tax(
     else:
         deductions_series = pd.Series([deductions for _ in range(len(years))], index=years)
 
-    # Initialize variables
-    portfolio_value = pd.Series(index=price.index, dtype=float)
-    portfolio_value_taxed = pd.Series(index=price.index, dtype=float)
-    cgt_tax_payments = pd.Series(0, index=years, dtype=float)
-    current_cash = init_cash
-    current_assets = 0
-    
-    # Dictionary to store values by year for final assembly
-    portfolio_values_by_year = {}
-    portfolio_values_taxed_by_year = {}
+    # Initialize portfolio tracking dictionaries
+    portfolios = {
+        "pf": {
+            "current_cash": init_cash,
+            "current_assets": 0,
+            "end_value": init_cash,
+            "values_by_year": {},
+            "order_at_start_of_year": np.nan,
+            "all_trades": pd.DataFrame(),
+            "sep_trades": {},
+            "all_orders": pd.DataFrame(columns=['id', 'col', 'idx', "date", 'size', 'price', 'fees', 'side']),
+            "portfolio_value": pd.Series(index=price.index, dtype=float)
+        },
+        "taxed_pf": {
+            "current_cash": init_cash,
+            "current_assets": 0,
+            "end_value": init_cash,
+            "values_by_year": {},
+            "order_at_start_of_year": np.nan,
+            "all_trades": pd.DataFrame(),
+            "sep_trades": {},
+            "all_orders": pd.DataFrame(columns=['id', 'col', 'idx', "date", 'size', 'price', 'fees', 'side']),
+            "portfolio_value": pd.Series(index=price.index, dtype=float),
+            "tax_details": pd.Series(),
+            "cgt_tax_payments_(aud)": pd.Series(0, index=years, dtype=float),
+            "cgt_tax_payments_(usd)": pd.Series(0, index=years, dtype=float),
+            "capital_loss_carryforward": 0
+        }
+    }
 
     fys = []
     print(f"Backtest price data runs from: {price.index[0]} to {price.index[-1]}, years: {years}")
@@ -358,148 +642,259 @@ def run_backtest_with_tax(
         fys.append(price.index[year_mask])
         print(f"For financial year: {year}\nStart date: {fys[i][0]}\nEnd date: {fys[i][-1]}")
     
-    order_at_start_of_year = np.nan
-    end_value = init_cash
-    all_trades = pd.DataFrame()
-    all_orders = pd.DataFrame()
-
     # Run backtest for each year
+    open_position = pd.DataFrame() # Open position to rollover to next year and add to trades_df
     for i, fy in enumerate(fys):
         # Get data for this year
-        # For Australian financial year (July 1st to June 30th)
-        # If month is before July, it belongs to previous financial year
         year_aud = aud[fy]
         year = fy[-1].year
         year_price = price[fy]
-        year_orders = orders[fy]
+        year_orders = orders[fy]  # Fill NaN values with 0 (hold)
 
-        print(f"\n\nRunning backtest for financial year: {year}")
-        if not pd.isna(order_at_start_of_year):
-            year_orders = pd.concat([pd.Series(order_at_start_of_year, index=[year_price.index[0]]), year_orders.iloc[1:]])
-            print(f"Added order at start of year {year}: {order_at_start_of_year}, year_orders: \n{year_orders.head()}")
-
-        # Run backtest for this year
-        print(f"Current cash: {current_cash}, current assets: {current_assets}, current value: {end_value}")
-        pf = vbt.Portfolio.from_orders(
-            year_price,
-            size = year_orders,
-            size_type = 'target_percent',
-            init_cash=end_value,
-            freq=freq
-        )
-
-        print(f"Backtest for year {year} completed. Portfolio value: {pd.concat([pf.value(), year_price], axis=1)}")
-
-        # Get trades for this year
-        trades_df = create_trades_df(pf, year_price, year_aud)
-        print(f"Trades for year {year}: {trades_df}")
+        print(f"\nRunning backtest for financial year: {year}")
+        print(f"Order dates for {year}: {year_orders.dropna().index.tolist()}")
         
-        # Calculate tax for this year
-        year_income = income_series.loc[year]
-        year_deductions = deductions_series.loc[year]
+        # Process both portfolios
+        for pf_type in ["pf", "taxed_pf"]:
+            pf_data = portfolios[pf_type]
             
-        # Get AUD rate at year end for tax calculation
-        year_end_aud = year_aud.iloc[-1]
-        
-        # Calculate tax
-        tax_result = single_year_tax(
-            year=year,
-            income=year_income,
-            year_trades=trades_df,
-            usdaud=year_end_aud,
-            deductions=year_deductions,
-            tax_rates=tax_rates
-        )
-        
-        print(f"Tax result for year {year}: {tax_result}")
-        # Update portfolio value and tax payments
-        portfolio_values_by_year[year] = pf.value()
-        cgt_tax_payments.loc[year] = tax_result['cgt_tax_(aud)']  # Add tax at year end
-        print(f"Paid total tax for {year} of {tax_result['total_tax_aud']} of which {cgt_tax_payments[year]} was CGT tax")
-        
-        # Store tax-adjusted values for this year
-        tax_adjusted_values = pf.value().copy()
-        # Adjust the final value to account for tax payment
-        tax_adjusted_values.iloc[-1] -= tax_result['cgt_tax_(aud)']
-        portfolio_values_taxed_by_year[year] = tax_adjusted_values
-        
-        # Get end of year values
-        end_cash = pf.cash()[-1]
-        end_assets = pf.assets()[-1]
-        end_price = year_price[-1]
-        cgt_tax = tax_result['cgt_tax_(aud)']
-        
-        # Handle year-end position and tax payment
-        if end_cash >= cgt_tax:
-            # If we have enough cash, just deduct the tax
-            current_cash = end_cash - cgt_tax
-            current_assets = end_assets
-            end_value = current_cash + (current_assets * end_price)
-        else:
-            # If we don't have enough cash, sell assets to pay tax
-            assets_to_sell = (cgt_tax - end_cash) / end_price
-            current_assets = end_assets - assets_to_sell
-            current_cash = 0.01  # Magic 1 cent tax refund
-            end_value = current_cash + (current_assets * end_price)
+            year_deductions = deductions_series.loc[year]
             
-        print(f"Current cash at end of year loop: {current_cash}, current assets: {current_assets}")
-        all_trades = pd.concat([all_trades, trades_df], axis = 0)
-        all_orders = pd.concat([all_orders, pf.orders.records], axis = 0)
+            # Handle orders at start of year if needed
+            current_orders = year_orders.copy()
+            if not pd.isna(pf_data["order_at_start_of_year"]):
+                current_orders = pd.concat([pd.Series(pf_data["order_at_start_of_year"], index=[year_price.index[0]]), 
+                                           current_orders.iloc[1:]])
+                print(f"Added order at start of year {year} for {pf_type}: {pf_data['order_at_start_of_year']}")
+            
+            # Run backtest for this year
+            print(f"Before backtest, {pf_type} - Current cash: {pf_data['current_cash']}, current assets: {pf_data['current_assets']}, current value: {pf_data['end_value']}")
+            print(f"Order values for {pf_type}: {current_orders.value_counts()}")
+            
+            pf = vbt.Portfolio.from_orders(
+                year_price,
+                size=current_orders,
+                size_type='target_percent',
+                init_cash=pf_data['end_value'],
+                freq=freq
+            )
+            
+            # Store portfolio values for this year
+            pf_data["values_by_year"][year] = pf.value()
 
-        # If we have assets and there's a next year, add a buy order at start of next year
-        if i < len(fys) - 1 and current_assets > 0:
-            next_year_start = fys[i+1][0]
-            # Calculate portfolio value at start of next year
-            next_year_start_price = price.loc[next_year_start]
-            portfolio_value_at_start = current_cash + (current_assets * next_year_start_price)
+            # Get end of year values
+            end_cash = pf.cash().iloc[-1]
+            end_assets = pf.assets().iloc[-1]
+            end_price = year_price.iloc[-1]
+            end_asset_fraction = (pf_data["current_assets"]*end_price) / pf_data["end_value"]
+            end_cash_fraction = 1 - end_asset_fraction
+            pf_data['current_cash'] = end_cash
+            pf_data['current_assets'] = end_assets
+            pf_data['end_value'] = end_cash + (end_assets * end_price)
+
+            # Process orders
+            ords = pd.DataFrame(pf.orders.records)
+            if not ords.empty:
+                ords['date'] = year_price.index[ords['idx']]
+                pf_data["all_orders"] = pd.concat([pf_data["all_orders"], ords], axis=0)
             
-            # Calculate what percentage of portfolio value would give us the same number of assets
-            target_percent = (current_assets * next_year_start_price) / portfolio_value_at_start
+            # Get trades for this year
+            trades_df = create_trades_df(pf, year_price, year_aud, year_orders)
+
+            print(f"After backtest, {pf_type} - Current cash: {pf_data['current_cash']}, current assets: {pf_data['current_assets']}, current value: {pf_data['end_value']}")
+            # If we have assets and there's a next year, prepare order for start of next year
+            if i < len(fys) - 1 and pf_data["current_assets"] > 0.000000001:
+                #Roll forward open position to next year
+                # if not open_position.empty:
+                #     trades_df = fuse_trade_records(open_position, trades_df)
+                # else:
+                #     open_position = trades_df.iloc[-1].copy() if not trades_df.empty else pd.DataFrame()
+                
+                # #Drop that open position from the portfolio trades records
+                # if not pf.trades.records.empty:
+                #     pf.trades.records.drop(pf.trades.records.index[-1], inplace=True)
+                # if not trades_df.empty:
+                #     trades_df.drop(trades_df.index[-1], inplace=True)
+
+                #print(f"Rolling forward open position to next year, {open_position}")
+                #Calculate target percentage for next year
+                next_year_start = fys[i+1][0]
+                # Calculate portfolio value at start of next year
+                next_year_start_price = price.loc[next_year_start]
+                portfolio_value_at_start = pf_data["current_cash"] + (pf_data["current_assets"] * next_year_start_price)
+                
+                # Calculate what percentage of portfolio value would give us the same number of assets
+                target_percent = (pf_data["current_assets"] * next_year_start_price) / portfolio_value_at_start
+                print(f"{pf_type} - Target percent for day 1 of year {year+1} order: {target_percent}")
+                
+                # Store the target percentage order for the first day of next year
+                pf_data["order_at_start_of_year"] = target_percent
+            else:
+                # Reset order_at_start_of_year if we have no assets
+                pf_data["order_at_start_of_year"] = np.nan
+                print(f"{pf_type} - No assets at end of year {year}, no order will be placed at start of next FY")
             
-            # Create a target percentage order for the first day of next year
-            order_at_start_of_year = target_percent
-         
-    # Combine all year's portfolio values into one series
-    for i, year in enumerate(years):
-        year_mask = (price.index >= fys[i][0]) & (price.index <= fys[i][-1])
-        if year in portfolio_values_by_year:
-            portfolio_value.loc[year_mask] = portfolio_values_by_year[year]
-            portfolio_value_taxed.loc[year_mask] = portfolio_values_taxed_by_year[year]
+            # For the taxed portfolio, handle tax calculations
+            if pf_type == "taxed_pf":
+                # Get AUD rate at year end for tax calculation
+                year_end_aud = year_aud.iloc[-1]
+                
+                # Calculate tax
+                year_income = income_series.loc[year]
+                tax_result = single_year_tax(year,
+                    year_income,
+                    trades_df,
+                    year_end_aud,
+                    previous_cg_loss=pf_data["capital_loss_carryforward"],
+                    deductions=year_deductions,
+                    tax_rates=tax_rates,
+                )
+
+                # Store tax payment
+                pf_data["tax_details"] = pd.concat([pf_data["tax_details"], tax_result.rename(year)], axis=1)
+                pf_data["cgt_tax_payments_(aud)"].loc[year] = tax_result['cgt_tax_(aud)']
+                cgt_tax_usd = tax_result['cgt_tax_(aud)'] / year_aud.iloc[-1]
+                pf_data["cgt_tax_payments_(usd)"].loc[year] = cgt_tax_usd
+                
+                # Update capital loss carryforward for next year from tax_result
+                next_year_capital_loss = tax_result['capital_loss_carryforward_(AUD)']
+                pf_data["capital_loss_carryforward"] = next_year_capital_loss
+                if next_year_capital_loss > 0:
+                    print(f"Capital loss of {next_year_capital_loss} AUD will be carried forward to next year")
+            else:
+                # For non-taxed portfolio, no tax adjustments needed
+                cgt_tax_usd = 0
+            
+            # Handle year-end position and tax payment (for taxed portfolio)
+            if pf_type == "taxed_pf" and cgt_tax_usd > 0:
+                if end_cash >= cgt_tax_usd:
+                    # If we have enough cash, just deduct the tax
+                    pf_data["current_cash"] = end_cash - cgt_tax_usd
+                    pf_data["current_assets"] = end_assets
+                    pf_data["end_value"] = pf_data["current_cash"] + (pf_data["current_assets"] * end_price)
+                    print(f"Paid CGT tax of {cgt_tax_usd} USD from cash")
+                else:
+                    # If we don't have enough cash, sell assets to pay taxfolio
+                    assets_to_sell = (cgt_tax_usd - end_cash) / end_price
+                    pf_data["current_assets"] = end_assets - assets_to_sell
+                    pf_data["current_cash"] = 0.01  # Magic 1 cent tax refund
+                    pf_data["end_value"] = pf_data["current_cash"] + (pf_data["current_assets"] * end_price)
+                    print(f"Paid CGT tax of {cgt_tax_usd} USD by selling {assets_to_sell} assets")
+            else:
+                # For non-taxed portfolio or no tax due
+                pf_data["current_cash"] = end_cash
+                pf_data["current_assets"] = end_assets
+                pf_data["end_value"] = end_cash + (end_assets * end_price)
+
+            #Store trades
+            if not trades_df.empty:
+                pf_data["sep_trades"][year] = trades_df
+                pf_data["all_trades"] = pd.concat([pf_data["all_trades"], trades_df], axis=0)
     
-    # Create a simulated asset price series from the tax-adjusted portfolio value
-    # We'll use this to create a regular Portfolio
-    simulated_price = portfolio_value.copy()
-    simulated_price_taxed = portfolio_value_taxed.copy()
+    # Combine all year's portfolio values into one series for each portfolio
+    for pf_type in ["pf", "taxed_pf"]:
+        pf_data = portfolios[pf_type]
+        for i, year in enumerate(years):
+            year_mask = (price.index >= fys[i][0]) & (price.index <= fys[i][-1])
+            if year in pf_data["values_by_year"]:
+                pf_data["portfolio_value"].loc[year_mask] = pf_data["values_by_year"][year]
+        
+        # Adjust final portfolio value for the last year's tax payment if needed
+        if pf_type == "taxed_pf" and pf_data["end_value"] != pf_data["portfolio_value"].iloc[-1]:
+            # Get the last date in the portfolio value series
+            last_date = pf_data["portfolio_value"].index[-1]
+            # Update the final value to match the end_value which includes the tax payment
+            pf_data["portfolio_value"].loc[last_date] = pf_data["end_value"]
+            print(f"Adjusted final portfolio value for {pf_type} to {pf_data['end_value']} to account for final tax payment")
     
-    # Create a regular Portfolio from the simulated price series
-    # We'll use from_holding since we already have the value series
-    pf_tax = vbt.Portfolio.from_holding(
-        simulated_price,
+    # Create Portfolio objects from the value series
+    non_taxed_portfolio = vbt.Portfolio.from_holding(
+        portfolios["pf"]["portfolio_value"],
         init_cash=init_cash,
         freq=freq
     )
     
-    # Create a tax-adjusted portfolio
-    pf_tax_adjusted = vbt.Portfolio.from_holding(
-        simulated_price_taxed,
+    taxed_portfolio = vbt.Portfolio.from_holding(
+        portfolios["taxed_pf"]["portfolio_value"],
         init_cash=init_cash,
         freq=freq
     )
+
+    # Calculate trade statistics for both portfolios
+    non_taxed_trade_stats = calculate_trade_statistics(portfolios["pf"]["all_trades"])
+    non_taxed_stats = non_taxed_portfolio.stats()
+    for key in non_taxed_trade_stats.keys():
+        non_taxed_stats[key] = non_taxed_trade_stats[key]
+    taxed_trade_stats = calculate_trade_statistics(portfolios["taxed_pf"]["all_trades"])
+    taxed_stats = taxed_portfolio.stats()
+    for key in taxed_trade_stats.keys():
+        taxed_stats[key] = taxed_trade_stats[key]
+ 
+    if portfolios["taxed_pf"]["current_assets"] > 0.000001:
+        taxed_stats["Total Open Trades"] = 1
+        non_taxed_stats["Total Open Trades"] = 1
+        non_taxed_stats["Total Closed Trades"]
+        taxed_stats["Total Closed Trades"] = taxed_stats["Total Trades"] - 1
+
+    # Prepare details dictionary
+    details = {
+        "non_taxed": {
+            "portfolio_value": portfolios["pf"]["portfolio_value"],
+            "all_trades": portfolios["pf"]["all_trades"],
+            "sep_trades": portfolios["pf"]["sep_trades"],
+            "all_orders": portfolios["pf"]["all_orders"],
+            "current_cash": portfolios["pf"]["current_cash"],
+            "current_assets": portfolios["pf"]["current_assets"],
+            "end_value": portfolios["pf"]["end_value"],
+            "stats": pd.Series(non_taxed_stats)
+        },
+        "taxed": {
+            "portfolio_value": portfolios["taxed_pf"]["portfolio_value"],
+            "all_trades": portfolios["taxed_pf"]["all_trades"],
+            "sep_trades": portfolios["taxed_pf"]["sep_trades"],
+            "all_orders": portfolios["taxed_pf"]["all_orders"],
+            "current_cash": portfolios["taxed_pf"]["current_cash"],
+            "current_assets": portfolios["taxed_pf"]["current_assets"],
+            "end_value": portfolios["taxed_pf"]["end_value"],
+            "tax_details": portfolios["taxed_pf"]["tax_details"].drop(0, axis = 1),
+            "tax_payments_(aud)": portfolios["taxed_pf"]["cgt_tax_payments_(aud)"],
+            "tax_payments_(usd)": portfolios["taxed_pf"]["cgt_tax_payments_(usd)"],
+            "stats": pd.Series(taxed_stats)
+        }
+    }
+
+    # Add trade statistics to details
+    details["non_taxed"]["trade_stats"] = non_taxed_trade_stats
+    details["taxed"]["trade_stats"] = taxed_trade_stats
+
+    return non_taxed_portfolio, taxed_portfolio, details
+
+def backtest_tax_cashflow(price: pd.Series, orders: pd.Series, init_cash: float, tax_payments_usd: pd.Series, freq: str = '1D') -> pd.DataFrame:
+    """
+    Run a vbt.Portolio.from_orders backtest of using the cgt_tax_pyments_(usd) series from the run_backtest_with_tax function.
+    That function runs a backtest for each financial year with tax payments simulated. We can then use the cgt_tax_payments_(usd) series
+    to run a final backtest using that series input to the cashflow parameter of the vbt.Portfolio.from_orders function. This will give us
+    a final porftfolio that has all the stats etc. caluclated and has tax payment simulation built in in an accurate way.
+
+    **Parameters:**
+    - price: pd.Series - Price series for the asset being traded
+    - orders: pd.Series - Orders series (1 for buy with all cash, 0 for sell all assets, NaN for no change) - "size_type" = "target_percent" will be used.
+    - init_cash: float - Initial cash amount
+    - tax_payments_usd: pd.Series - The series of tax payments from the run_backtest_with_tax function. 
+    - freq: str, optional - Frequency of the data. Default is '1D'.
     
-    details = {"portfolio_value": portfolio_value, 
-               "portfolio_value_taxed": portfolio_value_taxed,
-               "tax_payments": cgt_tax_payments, 
-               "all_trades": all_trades, 
-               "current_cash": current_cash, 
-               "current_assets": current_assets,
-               "all_orders": all_orders}
-    return pf_tax, pf_tax_adjusted, details
+    **Returns:**
+    - vbt.Portfolio - The final portfolio object
+    """
+    
+    pass
 
 if __name__ == "__main__":
     income = [91000, 93000, 96000, 103000, 112000, 117000]
     cgt_list = [1.0, 0.5, 1.0, 1.0, 1.0, 1.0]
     deductions = [3500, 4200, 2200, 5000, 6000, 7500]
 
+    
     # # Example usage
     # pf_with_tax = run_backtest_with_tax(
     #     price=data['BTCUSD'],

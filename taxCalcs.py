@@ -156,57 +156,7 @@ def defaultTaxRates() -> pd.DataFrame:
     # print(taxRates)
     return taxRates
 
-# def fuse_trade_records(open_position: pd.DataFrame, closed_trades: pd.DataFrame) -> pd.DataFrame:
-#     """ Take the open position dataframe which is the trade record for the open position from last year and fuse it with the close of that trade this year. 
-#     Only works for a single open position. This assumes the backtest has been run, using .from_orders with size_type = "targetpercent" and portfolio is always all in or all out of market & only a single asset is being traded.
-    
-#     Parameters:
-#     -----------
-#     open_position : pd.DataFrame
-#         The open position from the previous year(s)
-#     closed_trades : pd.DataFrame
-#         The closed trades for the current year
-#     trade_type : Literal["pf_records", "trades_df"]
-#         The type of records being fused
-        
-#     Returns:
-#     --------
-#     pd.DataFrame
-#         The fused trade records
-#     """
-#     if open_position.empty or closed_trades.empty:
-#         return closed_trades
-        
-#     print(f"Fusing trades dataframe, {open_position.iloc[0]} with {closed_trades.iloc[0]}")
-#     # For trades dataframe, we need to update more fields
-#     # Use .loc to avoid SettingWithCopyWarning
-#     closed_trades.loc[closed_trades.index[0], "entry_date"] = open_position["entry_date"]
-#     closed_trades.loc[closed_trades.index[0], "entry_price"] = open_position["entry_price"]
-#     closed_trades.loc[closed_trades.index[0], "entry_idx"] = open_position["entry_idx"]
-    
-#     # Calculate total duration including previous years
-#     total_duration = closed_trades.iloc[0]["duration_(days)"] + open_position["duration_(days)"]
-#     closed_trades.iloc[0]["duration_(days)"] = total_duration
-    
-#     # Update PnL and CGT amounts
-#     closed_trades.iloc[0]["pnl_(USD)"] += open_position["pnl_(USD)"]
-#     closed_trades.iloc[0]["pnl_(AUD)"] += open_position["pnl_(AUD)"]
-    
-#     # Recalculate return based on total duration and total PnL
-#     closed_trades.iloc[0]["return_(%)"] = ((closed_trades.iloc[0]["exit_price"] - closed_trades.iloc[0]["entry_price"])/closed_trades.iloc[0]["entry_price"]) * 100
-    
-#     # Update CGT rate based on total duration
-#     if total_duration > 365 and closed_trades.iloc[0]["pnl_(AUD)"] > 0:
-#         closed_trades.iloc[0]["cgt_rate"] = 0.5
-#     else:
-#         closed_trades.iloc[0]["cgt_rate"] = 1.0
-        
-#     # Recalculate CGT amount with updated rate
-#     closed_trades.iloc[0]["cgt_amount_(AUD)"] = closed_trades.iloc[0]["pnl_(AUD)"] * closed_trades.iloc[0]["cgt_rate"]
-        
-#     return closed_trades
-
-def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series, signal: pd.Series) -> pd.DataFrame:
+def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series, signal: pd.Series, deferred_trade: pd.DataFrame = None) -> pd.DataFrame:
     """ Add more info to the trades dataframe from a Portfolio backtest object.
 
     **Parameters:**
@@ -222,18 +172,23 @@ def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series, signal
     if len(pf.trades.records) == 0:
         return pd.DataFrame()  # Return empty dataframe if no trades
 
-    trades = pf.trades.records.drop(columns=["col", "id", "direction", "status", "parent_id"])
+    trades = pf.trades.records.drop(columns=["col", "direction", "status", "parent_id"])
     trades['entry_date'] = price.index[trades['entry_idx']]
+    trades["id"] = trades["entry_date"].apply(lambda x: f"{x.year}_")+trades.index.astype(str)
     trades['exit_date'] = price.index[trades['exit_idx']]
     trades["return"] *= 100
     trades["duration_(days)"] = (trades['exit_date'] - trades['entry_date']).dt.days
     trades.rename(columns={"return": "return_(%)", "pnl": "pnl_(USD)"}, inplace=True)
-    trades["signal"] = signal.loc[trades["exit_date"]].values
-    trades["pay_cgt"] = trades["signal"].apply(lambda x: "pay" if x == 0 else "defer")
+    trades["entry_signal"] = signal.loc[trades["entry_date"]].values
+    trades["exit_signal"] = signal.loc[trades["exit_date"]].values
+    trades["pay_cgt"] = trades["exit_signal"].apply(lambda x: "pay" if x == 0 else "defer")
     
     # Debug information
     print(f"Number of trades: {len(trades)}")
     print(f"Price date range: {price.index[0]} to {price.index[-1]}")
+
+    for i in range(len(trades)):
+        trades.loc[i, "financial_year"] = int(trades.loc[i, "exit_date"].year) if trades.loc[i, "exit_date"].month < 7 else int(trades.loc[i, "exit_date"].year) + 1
     
     # Check if we have AUD data for all trade dates
     missing_dates = trades['exit_date'][~trades['exit_date'].isin(aud.index)]
@@ -243,16 +198,19 @@ def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series, signal
     
     # Using pandas asof to match dates (will use the most recent rate if exact match not found)
     trades["pnl_(AUD)"] = trades["pnl_(USD)"] * aud.reindex(trades['exit_date'], method='ffill').values
-    
-    trades["cgt_rate"] = 1.0
-    for i in range(len(trades)):
-        trades.loc[i, "financial_year"] = int(trades.loc[i, "exit_date"].year) if trades.loc[i, "exit_date"].month < 7 else int(trades.loc[i, "exit_date"].year) + 1
-        if trades.loc[i, "duration_(days)"] > 365 and trades.loc[i, "pnl_(AUD)"] > 0:
-            trades.loc[i, "cgt_rate"] = 0.5
-        else:
-            trades.loc[i, "cgt_rate"] = 1.0
-    trades["cgt_amount_(AUD)"] = trades["pnl_(AUD)"] * trades["cgt_rate"]
     trades['financial_year'] = trades['financial_year'].astype(int)
+
+    reopened = trades[pd.isna(trades["entry_signal"])]
+    #This below should work for a trade closed the year after it was opened but may fail for multi-year long trades
+    if not reopened.empty and deferred_trade is not None:
+        total_duration = reopened["duration_(days)"].sum() + deferred_trade.iloc[0]["duration_(days)"]
+        print("Adding deferred trade to trades dataframe")
+        trades.loc[trades.index[0], "duration_(days)"] = total_duration #Add the duration of the deferred trade to the reopened trade
+        deferred_trade.loc[deferred_trade.index[0], "duration_(days)"] = total_duration
+        deferred_trade.loc[deferred_trade.index[0], "pay_cgt"] = "pay" #Set the deferred trade to pay CGT
+        print("Length of trades before adding deferred trade:", len(trades))
+        trades = pd.concat([deferred_trade, trades], axis = 0)
+        print("Length of trades after adding deferred trade:", len(trades), "\n", trades)
     return trades
 
 def tax_calc(trades: pd.DataFrame,
@@ -324,7 +282,8 @@ def tax_calc(trades: pd.DataFrame,
     return fy_totals
 
 def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud: float,
-                    previous_cg_loss: float = 0, deductions: float = 0, tax_rates: pd.DataFrame = None) -> pd.Series:
+                    previous_cg_loss: float = 0, deductions: float = 0, tax_rates: pd.DataFrame = None,
+                    constant_cgt_rate: float = None) -> pd.Series:
     """Calculate the tax to pay for a single financial year from CGT and non-CGT income.
     
     **Parameters:**
@@ -357,12 +316,30 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
     if year_trades.empty:
         cgt_aud = 0
         capital_loss_carryforward = previous_cg_loss
+        deferred = pd.DataFrame()
     else:
-        cgt_aud = year_trades["cgt_amount_(AUD)"].sum()
+        # Calculate the cgt_rate based on the duration of the trade, giving 50% discount for trades held longer than 12 months
+        if constant_cgt_rate is not None:
+            year_trades["cgt_rate"] = constant_cgt_rate
+        else:
+            year_trades["cgt_rate"] = 1.0
+            # Use vectorized operation to avoid SettingWithCopyWarning
+            long_term_gains = (year_trades["duration_(days)"] > 365) & (year_trades["pnl_(AUD)"] > 0)
+            year_trades.loc[long_term_gains, "cgt_rate"] = 0.5
+    
+        # Calculate the CGT amount in AUD
+        year_trades["cgt_amount_(AUD)"] = year_trades["pnl_(AUD)"] * year_trades["cgt_rate"]
+
+        #Exclude trades that are not closed yet, these are labelled as "defer" in the trades dataframe
+        year_toPay = year_trades[year_trades["pay_cgt"] == "pay"]
+        deferred = year_trades[year_trades["pay_cgt"] == "defer"]
+        cgt_aud = year_toPay["cgt_amount_(AUD)"].sum()
+        deferred_cgt = deferred["cgt_amount_(AUD)"].sum()
+        print(f"Tax calculation for year {year}, capital gains total: {cgt_aud}, Deferred capital gains: {deferred_cgt} AUD")
         # Store the original CGT amount for carryforward calculation
         capital_loss_carryforward = abs(cgt_aud) + previous_cg_loss if cgt_aud < 0 else 0
     
-    print(f"Single year tax calc, CGT amount to pay: {cgt_aud} AUD.\nCapital loss carryforward: {capital_loss_carryforward} AUD")
+    print(f"Capital loss carryforward: {capital_loss_carryforward} AUD")
     # Handle negative CGT
     if cgt_aud < 0:
         # For negative CGT, set CGT-related values to 0
@@ -430,7 +407,9 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         "capital_loss_carryforward_(AUD)": capital_loss_carryforward
     })
     
-    return result
+    # Change the status of the paid cgt trades to "paid"
+    year_trades["pay_cgt"] = f"paid_{year}"
+    return result, deferred, year_trades
 
 def calculate_trade_statistics(trades_df):
     """
@@ -516,8 +495,8 @@ def run_backtest_with_tax(
     deductions: Union[float, list] = 0,
     tax_rates: pd.DataFrame = None,
     freq: str = '1D',
-    exit_at_end: bool = False,
-    pay_final_tax_at_end: bool = False
+    special_conditions: dict = {"constant_cgt_rate": None,
+                                },
 ) -> vbt.Portfolio:
     """
     Run a backtest with tax calculations.
@@ -546,6 +525,10 @@ def run_backtest_with_tax(
         If True, exit all positions at the end of the backtest. Default is False.
     pay_final_tax_at_end : bool, optional
         If True, pay the tax for the final year at the end of the backtest. Default is False.
+
+    special_conditions : dict, optional
+        Dictionary of special conditions for the backtest. Keyword arguments, can be:
+        - "
 
     Returns
     -------
@@ -643,7 +626,7 @@ def run_backtest_with_tax(
         print(f"For financial year: {year}\nStart date: {fys[i][0]}\nEnd date: {fys[i][-1]}")
     
     # Run backtest for each year
-    open_position = pd.DataFrame() # Open position to rollover to next year and add to trades_df
+    deferred = pd.DataFrame()  # Placeholder for deferred tax
     for i, fy in enumerate(fys):
         # Get data for this year
         year_aud = aud[fy]
@@ -699,24 +682,12 @@ def run_backtest_with_tax(
                 pf_data["all_orders"] = pd.concat([pf_data["all_orders"], ords], axis=0)
             
             # Get trades for this year
-            trades_df = create_trades_df(pf, year_price, year_aud, year_orders)
+            trades_df = create_trades_df(pf, year_price, year_aud, year_orders, deferred_trade=deferred)
 
             print(f"After backtest, {pf_type} - Current cash: {pf_data['current_cash']}, current assets: {pf_data['current_assets']}, current value: {pf_data['end_value']}")
             # If we have assets and there's a next year, prepare order for start of next year
             if i < len(fys) - 1 and pf_data["current_assets"] > 0.000000001:
-                #Roll forward open position to next year
-                # if not open_position.empty:
-                #     trades_df = fuse_trade_records(open_position, trades_df)
-                # else:
-                #     open_position = trades_df.iloc[-1].copy() if not trades_df.empty else pd.DataFrame()
-                
-                # #Drop that open position from the portfolio trades records
-                # if not pf.trades.records.empty:
-                #     pf.trades.records.drop(pf.trades.records.index[-1], inplace=True)
-                # if not trades_df.empty:
-                #     trades_df.drop(trades_df.index[-1], inplace=True)
 
-                #print(f"Rolling forward open position to next year, {open_position}")
                 #Calculate target percentage for next year
                 next_year_start = fys[i+1][0]
                 # Calculate portfolio value at start of next year
@@ -741,13 +712,15 @@ def run_backtest_with_tax(
                 
                 # Calculate tax
                 year_income = income_series.loc[year]
-                tax_result = single_year_tax(year,
+                
+                tax_result, deferred, trades_df = single_year_tax(year,
                     year_income,
                     trades_df,
                     year_end_aud,
                     previous_cg_loss=pf_data["capital_loss_carryforward"],
                     deductions=year_deductions,
                     tax_rates=tax_rates,
+                    constant_cgt_rate=special_conditions["constant_cgt_rate"]
                 )
 
                 # Store tax payment
@@ -785,11 +758,17 @@ def run_backtest_with_tax(
                 pf_data["current_cash"] = end_cash
                 pf_data["current_assets"] = end_assets
                 pf_data["end_value"] = end_cash + (end_assets * end_price)
+ 
 
-            #Store trades
-            if not trades_df.empty:
-                pf_data["sep_trades"][year] = trades_df
-                pf_data["all_trades"] = pd.concat([pf_data["all_trades"], trades_df], axis=0)
+            pf_data["sep_trades"][year] = trades_df
+            if pf_data["all_trades"].empty:
+                pass
+            else:
+                # Check if there are any trades and if the last trade has pay_cgt = "defer"
+                if not pf_data["all_trades"].empty and pf_data["all_trades"].iloc[-1]["pay_cgt"] == "defer":
+                    print("Dropping deferred cgt payment trade from the records and incorporating into next years tax instead.")
+                    pf_data["all_trades"] = pf_data["all_trades"].iloc[:-1]
+            pf_data["all_trades"] = pd.concat([pf_data["all_trades"], trades_df], axis=0)
     
     # Combine all year's portfolio values into one series for each portfolio
     for pf_type in ["pf", "taxed_pf"]:

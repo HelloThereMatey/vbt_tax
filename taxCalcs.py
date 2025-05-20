@@ -234,6 +234,14 @@ def tax_calc(trades: pd.DataFrame,
     **Returns:**
     - pd.DataFrame - Payable tax information
     """
+        # Calculate the cgt_rate based on the duration of the trade, giving 50% discount for trades held longer than 12 months
+    trades["cgt_rate"] = 1.0
+    # Use vectorized operation to avoid SettingWithCopyWarning
+    long_term_gains = (trades["duration_(days)"] > 365) & (trades["pnl_(AUD)"] > 0)
+    trades.loc[long_term_gains, "cgt_rate"] = 0.5
+
+    # Calculate the CGT amount in AUD
+    trades["cgt_amount_(AUD)"] = trades["pnl_(AUD)"] * trades["cgt_rate"]
 
     ## The basic bits
     fy_totals = pd.Series(trades.groupby('financial_year')["cgt_amount_(AUD)"].sum().round(2)).to_frame()
@@ -279,7 +287,7 @@ def tax_calc(trades: pd.DataFrame,
     fy_totals["taxed_(% of gross income)"] = (fy_totals["total_tax_aud"] / fy_totals["gross_taxable_income_(AUD)"])*100
     fy_totals["non_cgt_tax_(aud)"] = pd.Series([tax[0] for tax in taxcomps], index=fy_totals.index)
     fy_totals["cgt_tax_(aud)"] = pd.Series([tax[1] for tax in taxcomps], index=fy_totals.index)
-    return fy_totals
+    return fy_totals, trades
 
 def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud: float,
                     previous_cg_loss: float = 0, deductions: float = 0, tax_rates: pd.DataFrame = None,
@@ -408,8 +416,8 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
     })
     
     # Change the status of the paid cgt trades to "paid"
-    year_trades["pay_cgt"] = f"paid_{year}"
-    return result, deferred, year_trades
+    year_toPay["pay_cgt"] = f"paid_{year}"
+    return result, deferred, year_toPay
 
 def calculate_trade_statistics(trades_df):
     """

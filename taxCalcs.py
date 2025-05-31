@@ -181,7 +181,7 @@ def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series, signal
     trades.rename(columns={"return": "return_(%)", "pnl": "pnl_(USD)"}, inplace=True)
     trades["entry_signal"] = signal.loc[trades["entry_date"]].values
     trades["exit_signal"] = signal.loc[trades["exit_date"]].values
-    trades["pay_cgt"] = trades["exit_signal"].apply(lambda x: "pay" if x == 0 else "defer")
+    trades["pay_cgt"] = trades["exit_signal"].apply(lambda x: "defer" if pd.isna(x) else "pay")
     
     # Debug information
     print(f"Number of trades: {len(trades)}")
@@ -210,7 +210,7 @@ def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series, signal
         deferred_trade.loc[deferred_trade.index[0], "pay_cgt"] = "pay" #Set the deferred trade to pay CGT
         print("Length of trades before adding deferred trade:", len(trades))
         trades = pd.concat([deferred_trade, trades], axis = 0)
-        print("Length of trades after adding deferred trade:", len(trades), "\n", trades)
+        print("Length of trades after adding deferred trade:", len(trades))
     return trades
 
 def tax_calc(trades: pd.DataFrame,
@@ -341,8 +341,10 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         #Exclude trades that are not closed yet, these are labelled as "defer" in the trades dataframe
         year_toPay = year_trades[year_trades["pay_cgt"] == "pay"]
         deferred = year_trades[year_trades["pay_cgt"] == "defer"]
+
         cgt_aud = year_toPay["cgt_amount_(AUD)"].sum()
         deferred_cgt = deferred["cgt_amount_(AUD)"].sum()
+        print(f"Closed trades this year: \n{year_toPay}\nDeferred trades: {deferred}")
         print(f"Tax calculation for year {year}, capital gains total: {cgt_aud}, Deferred capital gains: {deferred_cgt} AUD")
         # Store the original CGT amount for carryforward calculation
         capital_loss_carryforward = abs(cgt_aud) + previous_cg_loss if cgt_aud < 0 else 0
@@ -396,6 +398,7 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
     
     # Create result series
     result = pd.Series({
+        "closed_PnL_(AUD)": year_toPay["pnl_(AUD)"].sum(),
         "cgt_amount_(AUD)": cgt_aud,
         "salary_income_(AUD)": income,
         "gross_taxable_income_(AUD)": gross_taxable_income,
@@ -416,7 +419,8 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
     })
     
     # Change the status of the paid cgt trades to "paid"
-    year_toPay["pay_cgt"] = f"paid_{year}"
+    year_toPay.loc[:, "pay_cgt"] = f"paid_{year}"
+    print(f"Trades to pay CGT for {year}: {year_toPay}")
     return result, deferred, year_toPay
 
 def calculate_trade_statistics(trades_df):
@@ -581,7 +585,8 @@ def run_backtest_with_tax(
             "order_at_start_of_year": np.nan,
             "all_trades": pd.DataFrame(),
             "sep_trades": {},
-            "all_orders": pd.DataFrame(columns=['id', 'col', 'idx', "date", 'size', 'price', 'fees', 'side']),
+            "raw_trades": pd.DataFrame(),
+            "all_orders": pd.DataFrame(),
             "portfolio_value": pd.Series(index=price.index, dtype=float)
         },
         "taxed_pf": {
@@ -592,11 +597,12 @@ def run_backtest_with_tax(
             "order_at_start_of_year": np.nan,
             "all_trades": pd.DataFrame(),
             "sep_trades": {},
-            "all_orders": pd.DataFrame(columns=['id', 'col', 'idx', "date", 'size', 'price', 'fees', 'side']),
+            "raw_trades": pd.DataFrame(),
+            "all_orders": pd.DataFrame(),
             "portfolio_value": pd.Series(index=price.index, dtype=float),
             "tax_details": pd.Series(),
-            "cgt_tax_payments_(aud)": pd.Series(0, index=years, dtype=float),
-            "cgt_tax_payments_(usd)": pd.Series(0, index=years, dtype=float),
+            "tax_payments_(aud)": pd.Series(0, index=years, dtype=float),
+            "tax_payments_(usd)": pd.Series(0, index=years, dtype=float),
             "capital_loss_carryforward": 0
         }
     }
@@ -684,13 +690,14 @@ def run_backtest_with_tax(
             pf_data['end_value'] = end_cash + (end_assets * end_price)
 
             # Process orders
-            ords = pd.DataFrame(pf.orders.records)
+            ords = pd.DataFrame(pf.orders.records_readable)
             if not ords.empty:
-                ords['date'] = year_price.index[ords['idx']]
                 pf_data["all_orders"] = pd.concat([pf_data["all_orders"], ords], axis=0)
             
             # Get trades for this year
+            print(f"New trades df for {year}, deferred trade left from last year: ")
             trades_df = create_trades_df(pf, year_price, year_aud, year_orders, deferred_trade=deferred)
+            pf_data["raw_trades"] = pd.concat([pf_data["raw_trades"], trades_df], axis = 0)
 
             print(f"After backtest, {pf_type} - Current cash: {pf_data['current_cash']}, current assets: {pf_data['current_assets']}, current value: {pf_data['end_value']}")
             # If we have assets and there's a next year, prepare order for start of next year
@@ -733,9 +740,9 @@ def run_backtest_with_tax(
 
                 # Store tax payment
                 pf_data["tax_details"] = pd.concat([pf_data["tax_details"], tax_result.rename(year)], axis=1)
-                pf_data["cgt_tax_payments_(aud)"].loc[year] = tax_result['cgt_tax_(aud)']
+                pf_data["tax_payments_(aud)"].loc[year] = tax_result['cgt_tax_(aud)']
                 cgt_tax_usd = tax_result['cgt_tax_(aud)'] / year_aud.iloc[-1]
-                pf_data["cgt_tax_payments_(usd)"].loc[year] = cgt_tax_usd
+                pf_data["tax_payments_(usd)"].loc[year] = cgt_tax_usd
                 
                 # Update capital loss carryforward for next year from tax_result
                 next_year_capital_loss = tax_result['capital_loss_carryforward_(AUD)']
@@ -829,6 +836,7 @@ def run_backtest_with_tax(
             "portfolio_value": portfolios["pf"]["portfolio_value"],
             "all_trades": portfolios["pf"]["all_trades"],
             "sep_trades": portfolios["pf"]["sep_trades"],
+            "raw_trades": portfolios["pf"]["raw_trades"],
             "all_orders": portfolios["pf"]["all_orders"],
             "current_cash": portfolios["pf"]["current_cash"],
             "current_assets": portfolios["pf"]["current_assets"],
@@ -839,13 +847,14 @@ def run_backtest_with_tax(
             "portfolio_value": portfolios["taxed_pf"]["portfolio_value"],
             "all_trades": portfolios["taxed_pf"]["all_trades"],
             "sep_trades": portfolios["taxed_pf"]["sep_trades"],
+            "raw_trades": portfolios["taxed_pf"]["raw_trades"],
             "all_orders": portfolios["taxed_pf"]["all_orders"],
             "current_cash": portfolios["taxed_pf"]["current_cash"],
             "current_assets": portfolios["taxed_pf"]["current_assets"],
             "end_value": portfolios["taxed_pf"]["end_value"],
             "tax_details": portfolios["taxed_pf"]["tax_details"].drop(0, axis = 1),
-            "tax_payments_(aud)": portfolios["taxed_pf"]["cgt_tax_payments_(aud)"],
-            "tax_payments_(usd)": portfolios["taxed_pf"]["cgt_tax_payments_(usd)"],
+            "tax_payments_(aud)": portfolios["taxed_pf"]["tax_payments_(aud)"],
+            "tax_payments_(usd)": portfolios["taxed_pf"]["tax_payments_(usd)"],
             "stats": pd.Series(taxed_stats)
         }
     }

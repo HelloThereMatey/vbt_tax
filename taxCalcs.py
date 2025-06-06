@@ -760,21 +760,34 @@ def run_backtest_with_tax(
                     pf_data["current_cash"] = end_cash - cgt_tax_usd
                     pf_data["current_assets"] = end_assets
                     pf_data["end_value"] = pf_data["current_cash"] + (pf_data["current_assets"] * end_price)
-                    print(f"Paid CGT tax of {cgt_tax_usd} USD from cash")
+                    print(f"Paid CGT tax of {cgt_tax_usd} USD from available cash")
                 else:
                     # If we don't have enough cash, sell assets to pay taxfolio
                     assets_to_sell = (cgt_tax_usd - end_cash) / end_price
+                    #Calculate capital gains tax on the assets to sell, need the cost basis from the opening of the current trade....
+                    #Get the last order made which'll have the cost basis data
+                    ordas = pf.orders.records_readable
+                    cb = ordas["Price"].iloc[-1] 
+                    pnl_usd = (end_price - cb) * assets_to_sell
+                    pnl_aud = pnl_usd * year_end_aud
+
+                    print(f"{assets_to_sell:.6f} units of assets were sold, yielding {assets_to_sell*end_price:.2f} USD, to cover the CGT payment of {tax_result['cgt_tax_(aud)']:.2f} AUD/{cgt_tax_usd:.2f} USD.\
+                          \nThis resulted in a cap gain of {pnl_aud:.2f} AUD. This will be added as a negative deduction to next financial year.\n \
+                            \nCapital loss carryforward therefore updated to {pf_data['capital_loss_carryforward'] - pnl_aud:.2f} AUD")
+                    pf_data["capital_loss_carryforward"] -= pnl_aud
+                    
+                    print(f"Paid CGT tax of {cgt_tax_usd} USD by selling {assets_to_sell} assets")
+
                     pf_data["current_assets"] = end_assets - assets_to_sell
                     pf_data["current_cash"] = 0.01  # Magic 1 cent tax refund
                     pf_data["end_value"] = pf_data["current_cash"] + (pf_data["current_assets"] * end_price)
-                    print(f"Paid CGT tax of {cgt_tax_usd} USD by selling {assets_to_sell} assets")
+    
             else:
                 # For non-taxed portfolio or no tax due
                 pf_data["current_cash"] = end_cash
                 pf_data["current_assets"] = end_assets
                 pf_data["end_value"] = end_cash + (end_assets * end_price)
  
-
             pf_data["sep_trades"][year] = trades_df
             if pf_data["all_trades"].empty:
                 pass

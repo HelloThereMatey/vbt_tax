@@ -54,7 +54,7 @@ def plot_portfolios(portfolios: dict, return_fig: bool = False, title: str = "Po
         title=title,
         yaxis_title='Portfolio Value ($)',
         template='plotly_white',
-        width=1200,
+        width=1100,
         height=600,
         yaxis_type='log',
         showlegend=True,
@@ -62,7 +62,7 @@ def plot_portfolios(portfolios: dict, return_fig: bool = False, title: str = "Po
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=-0.2,
+            y=-0.3,
             xanchor="center",
             x=0.5
         )

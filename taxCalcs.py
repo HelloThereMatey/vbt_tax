@@ -30,12 +30,13 @@ def plot_portfolios(portfolios: dict, return_fig: bool = False, title: str = "Po
     # Create figure
     fig = go.Figure()
     # Add subtitle by creating a figure with layout that includes both title and subtitle
-
     for name, pf in portfolios.items():
         if isinstance(pf, vbt.Portfolio):
-            x=pf.value().index; y=pf.value().values
+            x = pf.value().index
+            y = np.round(pf.value().values, 2)  # Round to 2 decimal places
         elif isinstance(pf, pd.Series):
-            x = pf.index; y = pf.values
+            x = pf.index
+            y = np.round(pf.values, 2)  # Round to 2 decimal places
         else:
             print(f"Unknown portfolio type: {type(pf)}")
             continue

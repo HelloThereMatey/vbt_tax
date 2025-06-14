@@ -67,7 +67,7 @@ def extract_plotly_dimensions(plotly_file_path):
         print(f"Error reading Plotly file {plotly_file_path}: {e}")
         return 1000, 600
 
-def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, image_scale=0.8):
+def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, image_scale=0.8, buffer_width=50, increase_font = 3):
     """
     Replace static images in an HTML report with interactive plotly iframes.
     Automatically adjusts document width based on actual plot dimensions.
@@ -76,15 +76,19 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
     HTML file with the same name (excluding extension) in the same directory,
     it replaces the static image with an interactive plotly iframe.
     
-    Args:
-        html_file_path (str): Path to the input HTML report file
-        output_path (str, optional): Path for the output HTML file with interactive plots. 
-                                    If None, will use the original filename with '_interactive' suffix.
-        image_scale (float, optional): Scale factor for static images (0.1 to 1.0). Default is 0.8 (80%).
+    **Args:**
+        - html_file_path (str): Path to the input HTML report file
+        - output_path (str, optional): Path for the output HTML file with interactive plots. 
+                If None, will use the original filename with '_interactive' suffix.
+        - image_scale (float, optional): Scale factor for static images (0.1 to 1.0). Default is 0.8 (80%).
+        - buffer_width (int, optional): Additional buffer width to add to the document for better layout. Default is 50px.
+        - increase_font (int, optional): Increase font size for better readability in landscape mode. Default is 3px. 
+            This is added to the base font size of 11px.
     
     Returns:
         str: Path to the new HTML file with interactive plots
     """
+
     import os
     from bs4 import BeautifulSoup
     
@@ -92,18 +96,27 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
     input_dir = os.path.dirname(html_file_path)
     if input_dir == "":
         input_dir = "."
-        
+    
+    # Look for interactive figures in the figures subdirectory
+    figures_dir = os.path.join(input_dir, "figures")
+    
     # Set default output path if not provided
     if output_path is None:
         base_name = os.path.basename(html_file_path)
         name, ext = os.path.splitext(base_name)
         output_path = os.path.join(input_dir, f"{name}_interactive{ext}")
     
-    # Get list of HTML files in the directory
-    html_files = [f for f in os.listdir(input_dir) if f.endswith('.html') and f != os.path.basename(html_file_path)]
-    html_file_names = [os.path.splitext(f)[0] for f in html_files]
+    # Get list of HTML files in the figures directory
+    html_files = []
+    html_file_names = []
     
-    print(f"Found {len(html_files)} HTML files in directory that could be interactive plots")
+    if os.path.exists(figures_dir):
+        html_files = [f for f in os.listdir(figures_dir) if f.endswith('.html')]
+        html_file_names = [os.path.splitext(f)[0] for f in html_files]
+        print(f"Found {len(html_files)} HTML files in figures/ directory that could be interactive plots")
+    else:
+        print(f"Warning: figures/ directory not found at {figures_dir}")
+        figures_dir = input_dir  # Fallback to input directory if figures dir doesn't exist
     
     # Read the input HTML file
     with open(html_file_path, 'r', encoding='utf-8') as f:
@@ -137,7 +150,7 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
             
             # Check if there's a matching HTML file
             if img_filename in html_file_names:
-                plotly_file_path = os.path.join(input_dir, f"{img_filename}.html")
+                plotly_file_path = os.path.join(figures_dir, f"{img_filename}.html")
                 width, height = extract_plotly_dimensions(plotly_file_path)
                 plot_dimensions.append((width, height))
                 max_plot_width = max(max_plot_width, width)
@@ -146,7 +159,7 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
                 
                 # Create new iframe tag with proper sizing using style attribute
                 iframe = soup.new_tag('iframe')
-                iframe['src'] = f"{img_filename}.html"
+                iframe['src'] = f"./figures/{img_filename}.html"
                 iframe['class'] = 'plotly-iframe'
                 iframe['frameborder'] = '0'
                 iframe['scrolling'] = 'no'
@@ -170,8 +183,8 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
                 style_tag.decompose()
         
         # Calculate proper document width with margins
-        document_width = max_plot_width + 100  # Add 100px buffer
-        
+        document_width = max_plot_width + buffer_width  # Add 100px buffer
+
         # Improved CSS for proper iframe display and document width
         dynamic_css = f"""
         .plotly-iframe {{
@@ -188,14 +201,66 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
             min-width: 800px;
             min-height: 500px;
         }}
+
+        /* Override original markdown styles with larger fonts for landscape HTML viewing */
+        p {{
+            font-size: {11 + increase_font}px !important;
+        }}
+        
+        li {{
+            font-size: {11 + increase_font}px !important;
+        }}
+        
+        figcaption {{
+            font-size: {11 + increase_font}px !important;
+        }}
+        
+        table {{
+            font-size: {10 + increase_font}px !important;
+        }}
+        
+        math, .math {{
+            font-size: {11 + increase_font}px !important;
+        }}
+        
+        code, pre {{
+            font-size: {11 + increase_font}px !important;
+        }}
+        
+        /* Increase heading font sizes for better readability in landscape mode */
+        h1 {{
+            font-size: {42 + increase_font}px !important;
+        }}
+        
+        h2 {{
+            font-size: {33 + increase_font}px !important;
+        }}
+        
+        h3 {{
+            font-size: {26 + increase_font}px !important;
+        }}
+        
+        h4 {{
+            font-size: {20.5 + increase_font}px !important;
+        }}
+        
+        h5 {{
+            font-size: {17.5 + increase_font}px !important;
+        }}
+        
+        h6 {{
+            font-size: {15 + increase_font}px !important;
+        }}
         
         /* Force wider document width to accommodate plots */
-        @media screen and (min-width:{document_width + 200}px) {{
+        @media screen and (min-width:{document_width + 100}px) {{
+
             html body[for=html-export]:not([data-presentation-mode]) .markdown-preview {{
                 padding: 2em calc(50% - {document_width//2}px + 2em) !important;
                 max-width: {document_width}px !important;
                 width: {document_width}px !important;
             }}
+        
         }}
         
         /* Override existing narrow width constraints */
@@ -220,7 +285,7 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
         }}
         
         /* For larger screens with TOC, center content better */
-        @media screen and (min-width:{document_width + 450}px) {{
+        @media screen and (min-width:{document_width + 550}px) {{
             html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .markdown-preview {{
                 padding: 2em calc(50% - {document_width//2}px + 2em) !important;
                 max-width: {document_width}px !important;
@@ -241,6 +306,30 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
             min-width: 50%;
             max-width: {document_width}px;
             margin: 0 auto;
+        }}
+
+                /* Table display adjustment */
+        table {{
+            width: auto;
+            min-width: 50%;
+            max-width: {document_width}px;
+            margin: 0 auto;
+            text-align: center;
+        }}
+        
+        /* Center align table headers and cells */
+        table th, table td {{
+            text-align: center !important;
+        }}
+        
+        /* Responsive images with scaling and center alignment */
+        img {{
+            width: {image_scale_percent}% !important;
+            height: auto !important;
+            max-width: {document_width}px;
+            display: block !important;
+            margin: 20px auto !important;
+            object-fit: contain;
         }}
         
         /* Responsive images with scaling and center alignment */
@@ -293,6 +382,7 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
         head.append(plot_style)
     
     # Write modified HTML to output file
+    print(f"Saving interactive HTML report to {output_path}")
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(str(soup))
     
@@ -308,7 +398,12 @@ if __name__ == "__main__":
     parser.add_argument('html_file', help="Path to the input HTML report file")
     parser.add_argument('--output', help="Path for the output HTML file with interactive plots", default=None)
     parser.add_argument('--image-scale', type=float, default=0.8, help="Scale factor for static images (0.1 to 1.0). Default is 0.8 (80%%)")
+    parser.add_argument('--buffer', type=float, default=80, help="Add additional buffer width to document (default 80px)")
+    parser.add_argument('--increase-font', type=int, default=3, help="Increase font size for better readability in landscape mode (default 3px)")
     
     args = parser.parse_args()
     
     replace_static_images_with_plotly_iframes(args.html_file, args.output, args.image_scale)
+
+    #Sample usage:
+    # python intplots_html_landscape.py '/Users/jamesbishop/Documents/Financial/Investment/MACRO_STUDIES/TwitterThreadz/hOdLeRs/42_Macro_BackTests.html' --image-scale 0.8 --increase-font 4

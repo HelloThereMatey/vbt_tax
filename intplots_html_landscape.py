@@ -183,203 +183,199 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
                 style_tag.decompose()
         
         # Calculate proper document width with margins
-        document_width = max_plot_width + buffer_width  # Add 100px buffer
+        text_width = max_plot_width + 200  # Text wider than plots
+        min_content_width = max(1000, max_plot_width + 100)
 
-        # Improved CSS for proper iframe display and document width
+        # Simplified and more robust CSS
         dynamic_css = f"""
+        /* Plotly iframe styling */
         .plotly-iframe {{
             border: none;
             margin: 20px auto;
             display: block;
             max-width: 100%;
             background: white;
-            overflow-x: auto;
+            overflow: hidden;
         }}
         
-        /* Ensure iframes are visible and not cut off */
         iframe.plotly-iframe {{
             min-width: 800px;
             min-height: 500px;
         }}
 
-        /* Override original markdown styles with larger fonts for landscape HTML viewing */
-        p {{
-            font-size: {11 + increase_font}px !important;
-        }}
+        /* Enhanced font sizes for landscape viewing */
+        p {{ font-size: {11 + increase_font}px !important; }}
+        li {{ font-size: {11 + increase_font}px !important; }}
+        figcaption {{ font-size: {11 + increase_font}px !important; }}
+        table {{ font-size: {10 + increase_font}px !important; }}
+        math, .math {{ font-size: {11 + increase_font}px !important; }}
+        code, pre {{ font-size: {11 + increase_font}px !important; }}
         
-        li {{
-            font-size: {11 + increase_font}px !important;
-        }}
+        h1 {{ font-size: {42 + increase_font}px !important; }}
+        h2 {{ font-size: {33 + increase_font}px !important; }}
+        h3 {{ font-size: {26 + increase_font}px !important; }}
+        h4 {{ font-size: {20.5 + increase_font}px !important; }}
+        h5 {{ font-size: {17.5 + increase_font}px !important; }}
+        h6 {{ font-size: {15 + increase_font}px !important; }}
         
-        figcaption {{
-            font-size: {11 + increase_font}px !important;
-        }}
-        
-        table {{
-            font-size: {10 + increase_font}px !important;
-        }}
-        
-        math, .math {{
-            font-size: {11 + increase_font}px !important;
-        }}
-        
-        code, pre {{
-            font-size: {11 + increase_font}px !important;
-        }}
-        
-        /* Increase heading font sizes for better readability in landscape mode */
-        h1 {{
-            font-size: {42 + increase_font}px !important;
-        }}
-        
-        h2 {{
-            font-size: {33 + increase_font}px !important;
-        }}
-        
-        h3 {{
-            font-size: {26 + increase_font}px !important;
-        }}
-        
-        h4 {{
-            font-size: {20.5 + increase_font}px !important;
-        }}
-        
-        h5 {{
-            font-size: {17.5 + increase_font}px !important;
-        }}
-        
-        h6 {{
-            font-size: {15 + increase_font}px !important;
-        }}
-        
-        /* Force wider document width to accommodate plots */
-        @media screen and (min-width:{document_width + 100}px) {{
-
-            html body[for=html-export]:not([data-presentation-mode]) .markdown-preview {{
-                padding: 2em calc(50% - {document_width//2}px + 2em) !important;
-                max-width: {document_width}px !important;
-                width: {document_width}px !important;
-            }}
-        
-        }}
-        
-        /* Override existing narrow width constraints */
-        html body[for=html-export]:not([data-presentation-mode]) .markdown-preview {{
-            max-width: {document_width}px !important;
-            width: auto !important;
-            margin: 0 auto !important;
-        }}
-        
-        /* Reduce TOC sidebar width and adjust content margin */
-        html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc {{
-            width: 250px !important;
-        }}
-        
-        /* Adjust content area when TOC is visible - reduce left margin */
-        html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .markdown-preview {{
-            left: 250px !important;
-            width: calc(100% - 250px) !important;
-            padding: 2em 2em !important;
-            margin: 0 !important;
-            max-width: none !important;
-        }}
-        
-        /* For larger screens with TOC, center content better */
-        @media screen and (min-width:{document_width + 550}px) {{
-            html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .markdown-preview {{
-                padding: 2em calc(50% - {document_width//2}px + 2em) !important;
-                max-width: {document_width}px !important;
-            }}
-        }}
-        
-        /* Enhanced readability for dynamic width */
-        p, li {{
-            max-width: {document_width}px;
-            margin: 0 auto;
-            line-height: 1.6;
-            padding: 0 20px;
-        }}
-        
-        /* Table display adjustment */
+        /* Center-aligned tables and images */
         table {{
             width: auto;
             min-width: 50%;
-            max-width: {document_width}px;
-            margin: 0 auto;
-        }}
-
-                /* Table display adjustment */
-        table {{
-            width: auto;
-            min-width: 50%;
-            max-width: {document_width}px;
-            margin: 0 auto;
+            max-width: {max_plot_width}px;
+            margin: 20px auto;
             text-align: center;
         }}
         
-        /* Center align table headers and cells */
         table th, table td {{
             text-align: center !important;
         }}
         
-        /* Responsive images with scaling and center alignment */
         img {{
             width: {image_scale_percent}% !important;
             height: auto !important;
-            max-width: {document_width}px;
+            max-width: {max_plot_width}px;
             display: block !important;
             margin: 20px auto !important;
             object-fit: contain;
         }}
         
-        /* Responsive images with scaling and center alignment */
-        img {{
-            width: {image_scale_percent}% !important;
-            height: auto !important;
-            max-width: {document_width}px;
-            display: block !important;
-            margin: 20px auto !important;
-            object-fit: contain;
-        }}
-        
-        /* Center content container */
-        .markdown-preview {{
-            max-width: {document_width}px !important;
-            margin: 0 auto !important;
-        }}
-        
-        /* Add horizontal scrolling if needed */
-        body {{
-            overflow-x: auto;
-            min-width: {document_width}px;
-        }}
-        
-        /* Ensure headings fit properly */
-        h1, h2, h3, h4, h5, h6 {{
-            max-width: {document_width}px;
-            margin-left: auto;
-            margin-right: auto;
-            padding: 0 20px;
-        }}
-        
-        /* Ensure all figures are centered */
         figure {{
             text-align: center;
             margin: 20px auto;
         }}
         
-        /* Center any remaining images that might not be caught */
-        .markdown-preview img {{
-            width: {image_scale_percent}% !important;
-            height: auto !important;
-            display: block !important;
-            margin: 20px auto !important;
+        /* Dynamic content width - will be adjusted by JavaScript */
+        .content-container {{
+            max-width: {text_width}px;
+            margin: 0 auto;
+            padding: 0 20px;
+            box-sizing: border-box;
         }}
+        
+        /* Override default markdown preview styles */
+        html body[for=html-export]:not([data-presentation-mode]) .markdown-preview {{
+            max-width: none !important;
+            width: 100% !important;
+            padding: 2em 20px !important;
+            margin: 0 !important;
+        }}
+        
+        /* Wrap content in container */
+        .markdown-preview > * {{
+            max-width: {text_width}px;
+            margin-left: auto;
+            margin-right: auto;
+        }}
+        
+        /* Ensure plots can be wider than text */
+        .markdown-preview > iframe.plotly-iframe,
+        .markdown-preview > figure,
+        .markdown-preview > table {{
+            max-width: {max_plot_width + 100}px !important;
+        }}
+        
+        /* TOC adjustments */
+        html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .md-sidebar-toc {{
+            width: 280px !important;
+        }}
+        
+        html body[for=html-export]:not([data-presentation-mode])[html-show-sidebar-toc] .markdown-preview {{
+            left: 280px !important;
+            width: calc(100% - 280px) !important;
+            padding: 2em 20px !important;
+        }}
+        
+        /* Minimum body width to prevent cramping */
+        body {{
+            min-width: {min_content_width}px;
+        }}
+        """
+        
+        # Add JavaScript for dynamic width adjustment
+        js_script = f"""
+        <script>
+        (function() {{
+            const MAX_PLOT_WIDTH = {max_plot_width};
+            const TEXT_WIDTH = {text_width};
+            const MIN_CONTENT_WIDTH = {min_content_width};
+            
+            function adjustContentWidth() {{
+                const viewportWidth = window.innerWidth;
+                const tocVisible = document.body.hasAttribute('html-show-sidebar-toc');
+                const tocWidth = tocVisible ? 280 : 0;
+                const availableWidth = viewportWidth - tocWidth;
+                
+                // Calculate optimal content width
+                let contentWidth;
+                if (availableWidth > TEXT_WIDTH + 200) {{
+                    contentWidth = TEXT_WIDTH;
+                }} else if (availableWidth > MIN_CONTENT_WIDTH + 100) {{
+                    contentWidth = Math.min(TEXT_WIDTH, availableWidth - 100);
+                }} else {{
+                    contentWidth = Math.max(MIN_CONTENT_WIDTH, availableWidth - 40);
+                }}
+                
+                // Apply the width
+                const style = document.getElementById('dynamic-width-style') || document.createElement('style');
+                style.id = 'dynamic-width-style';
+                style.textContent = `
+                    .markdown-preview > * {{
+                        max-width: ${{contentWidth}}px !important;
+                    }}
+                    .markdown-preview > iframe.plotly-iframe,
+                    .markdown-preview > figure,
+                    .markdown-preview > table {{
+                        max-width: ${{Math.max(contentWidth, MAX_PLOT_WIDTH)}}px !important;
+                    }}
+                `;
+                
+                if (!document.getElementById('dynamic-width-style')) {{
+                    document.head.appendChild(style);
+                }}
+            }}
+            
+            // Adjust on load and resize
+            window.addEventListener('load', adjustContentWidth);
+            window.addEventListener('resize', adjustContentWidth);
+            
+            // Watch for TOC toggle
+            const tocBtn = document.getElementById('sidebar-toc-btn');
+            if (tocBtn) {{
+                tocBtn.addEventListener('click', function() {{
+                    setTimeout(adjustContentWidth, 10);
+                }});
+            }}
+            
+            // MutationObserver to catch TOC attribute changes
+            const observer = new MutationObserver(function(mutations) {{
+                mutations.forEach(function(mutation) {{
+                    if (mutation.type === 'attributes' && 
+                        mutation.attributeName === 'html-show-sidebar-toc') {{
+                        setTimeout(adjustContentWidth, 10);
+                    }}
+                }});
+            }});
+            
+            observer.observe(document.body, {{
+                attributes: true,
+                attributeFilter: ['html-show-sidebar-toc']
+            }});
+            
+            // Initial adjustment
+            setTimeout(adjustContentWidth, 100);
+        }})();
+        </script>
         """
         
         plot_style = soup.new_tag('style')
         plot_style.string = dynamic_css
         head.append(plot_style)
+        
+        # Add JavaScript
+        js_tag = soup.new_tag('script')
+        js_tag.string = js_script.replace('<script>', '').replace('</script>', '')
+        head.append(js_tag)
     
     # Write modified HTML to output file
     print(f"Saving interactive HTML report to {output_path}")
@@ -388,6 +384,7 @@ def replace_static_images_with_plotly_iframes(html_file_path, output_path=None, 
     
     print(f"Interactive HTML report saved to {output_path}")
     print(f"Document width optimized for plots up to {max_plot_width}px wide")
+    print(f"Text width set to {text_width}px with dynamic adjustment")
     print(f"Static images scaled to {image_scale_percent}% width and center-aligned")
     return output_path
 
@@ -403,7 +400,8 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     
-    replace_static_images_with_plotly_iframes(args.html_file, args.output, args.image_scale)
+    replace_static_images_with_plotly_iframes(args.html_file, args.output, args.image_scale, args.buffer, args.increase_font)
 
     #Sample usage:
     # python intplots_html_landscape.py '/Users/jamesbishop/Documents/Financial/Investment/MACRO_STUDIES/TwitterThreadz/hOdLeRs/42_Macro_BackTests.html' --image-scale 0.8 --increase-font 4
+    #python intplots_html_landscape.py '/Users/jamesbishop/Documents/Financial/Investment/MACRO_STUDIES/TwitterThreadz/hOdLeRs/42_Macro_BackTests.html' --image-scale 0.8 --increase-font 3

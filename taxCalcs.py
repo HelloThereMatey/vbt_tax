@@ -154,8 +154,36 @@ def plot_timeseries_with_vlines(price_series, vline_dict=None, title='Time Serie
 def defaultTaxRates() -> pd.DataFrame:
     print("Using default tax information for Australia from 2019 - 2025.")
     taxRates = pd.read_excel(wd+fdel+"tax_rates.xlsx", index_col=0)
-    # print(taxRates)
-    return taxRates
+    tax_brackets = {bracket: group for bracket, group in taxRates.groupby('bracket')}
+
+    return taxRates, tax_brackets
+
+def determine_tax_bracket(gross_income: float, year: int, tax_rates: pd.DataFrame = None, deductions: float = 0) -> str:
+    """Determine the tax bracket for a given gross income and year.
+
+    **Parameters:**
+    - gross_income: float - The gross income for the financial year.
+    - year: int - The financial year (e.g. 2021 for 2020-21).
+    - tax_rates: pd.DataFrame - The tax rates information dataframe. If None, uses default Australian tax rates.
+    - deductions: float - Total deductions in AUD.
+
+    **Returns:**
+    - str - The tax bracket for the given gross income and year.
+    """
+    if tax_rates is None:
+        tax_rates = defaultTaxRates()[0] # Get the default tax rates table
+
+    net_income = gross_income - deductions
+    bracket_row = tax_rates.loc[
+        (tax_rates.index == year) & 
+        (tax_rates["bracket_min_aud"] <= net_income) &
+        ((tax_rates["bracket_max_aud"].isna()) | (net_income <= tax_rates["bracket_max_aud"]))
+    ]
+    
+    if not bracket_row.empty:
+        return bracket_row.iloc[0]["bracket"]
+    else:
+        return "Unknown"
 
 def create_trades_df(pf: vbt.Portfolio, price: pd.Series, aud: pd.Series, signal: pd.Series, deferred_trade: pd.DataFrame = None) -> pd.DataFrame:
     """ Add more info to the trades dataframe from a Portfolio backtest object.
@@ -219,7 +247,7 @@ def tax_calc(trades: pd.DataFrame,
              deductions: Union[float, list] = 0, 
              tax_rates: pd.DataFrame = None) -> pd.DataFrame:
     """
-    Calculate the tax payable for each financial year based on the trades and tax rates and income etc.
+    Calculate the tax for each financial year based on the trades and tax rates and income etc.
 
     **Parameters:**
     - trades: pd.DataFrame - This is the trades dataframe from a vbt.Portfolio backtest with the following columns:
@@ -248,7 +276,7 @@ def tax_calc(trades: pd.DataFrame,
     fy_totals = pd.Series(trades.groupby('financial_year')["cgt_amount_(AUD)"].sum().round(2)).to_frame()
 
     if tax_rates is None:
-        tax_rates = defaultTaxRates()
+        tax_rates = defaultTaxRates()[0] # Get the default tax rates table
 
     fy_totals["trades"] = pd.Series(trades.groupby("financial_year").size().to_list(), index=fy_totals.index)
     fy_totals["gross_taxable_income_(AUD)"] = pd.Series(income, index = fy_totals.index) + fy_totals["cgt_amount_(AUD)"]
@@ -311,7 +339,7 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         - gross_taxable_income_(AUD): Total taxable income
         - gross_deductions_(AUD): Total deductions
         - net_taxable_income_(AUD): Net taxable income after deductions
-        - total_tax_aud: Total tax payable
+        - total_tax_aud: Total tax
         - taxed_(% of gross income): Tax as percentage of gross income
         - non_cgt_tax_(aud): Tax on non-CGT income
         - cgt_tax_(aud): Tax on capital gains
@@ -319,7 +347,7 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
     """
 
     if tax_rates is None:
-        tax_rates = defaultTaxRates()
+        tax_rates = defaultTaxRates()[0]  # Get the default tax rates table
 
     # Calculate CGT amount from trades
     if year_trades.empty:
@@ -505,6 +533,7 @@ def run_backtest_with_tax(
     aud: pd.Series,
     init_cash: float,
     income: Union[float, list],
+    trading_fees: float = 0.0,
     deductions: Union[float, list] = 0,
     tax_rates: pd.DataFrame = None,
     freq: str = '1D',
@@ -674,6 +703,7 @@ def run_backtest_with_tax(
                 size=current_orders,
                 size_type='target_percent',
                 init_cash=pf_data['end_value'],
+                fees=trading_fees,
                 freq=freq
             )
             
@@ -898,6 +928,79 @@ def backtest_tax_cashflow(price: pd.Series, orders: pd.Series, init_cash: float,
     """
     
     pass
+
+
+def calculate_performance_stats(equity_curve, periods_per_year=252, target_return=0.0):
+    """
+    Calculate performance statistics from equity curve time series
+    
+    Parameters:
+    equity_curve: pd.Series with datetime index representing equity values
+    periods_per_year: 252 for daily, 12 for monthly, 1 for annual
+    target_return: target return for Sortino ratio (annualized)
+    
+    Returns:
+    dict: Dictionary containing all performance statistics
+    """
+    
+    # Calculate returns
+    returns = equity_curve.pct_change().dropna()
+    
+    # Basic calculations
+    total_return = (equity_curve.iloc[-1] / equity_curve.iloc[0]) - 1
+    annual_return = (1 + total_return) ** (periods_per_year / len(returns)) - 1
+    
+    # Returns statistics
+    mean_return = returns.mean()
+    std_return = returns.std()
+    
+    # Winning and losing trades
+    winning_returns = returns[returns > 0]
+    losing_returns = returns[returns < 0]
+    
+    # Profit Factor
+    gross_profit = winning_returns.sum() if len(winning_returns) > 0 else 0
+    gross_loss = abs(losing_returns.sum()) if len(losing_returns) > 0 else 0
+    profit_factor = gross_profit / gross_loss if gross_loss != 0 else np.inf
+    
+    # Expectancy (average return per trade)
+    expectancy = mean_return
+    
+    # Sharpe Ratio (assuming risk-free rate = 0)
+    sharpe_ratio = (mean_return / std_return) * np.sqrt(periods_per_year) if std_return != 0 else 0
+    
+    # Maximum Drawdown for Calmar Ratio
+    running_max = equity_curve.expanding().max()
+    drawdown = (equity_curve - running_max) / running_max
+    max_drawdown = abs(drawdown.min())
+    
+    # Calmar Ratio
+    calmar_ratio = annual_return / max_drawdown if max_drawdown != 0 else 0
+    
+    # Sortino Ratio
+    target_return_periodic = target_return / periods_per_year
+    downside_returns = returns[returns < target_return_periodic]
+    downside_deviation = np.sqrt(np.mean(downside_returns**2)) if len(downside_returns) > 0 else 0
+    sortino_ratio = (mean_return - target_return_periodic) / downside_deviation * np.sqrt(periods_per_year) if downside_deviation != 0 else 0
+    
+    # Omega Ratio
+    threshold = target_return / periods_per_year
+    excess_returns = returns - threshold
+    gains = excess_returns[excess_returns > 0].sum()
+    losses = abs(excess_returns[excess_returns < 0].sum())
+    omega_ratio = gains / losses if losses != 0 else np.inf
+    
+    return {
+        "End Value": equity_curve.iloc[-1],
+        "Total Return [%]": total_return * 100,  # Convert to percentage
+        'Profit Factor': profit_factor,
+        'Expectancy': expectancy * 100,  # Convert to percentage
+        'Sharpe Ratio': sharpe_ratio,
+        'Calmar Ratio': calmar_ratio,
+        'Omega Ratio': omega_ratio,
+        'Sortino Ratio': sortino_ratio
+    }
+
 
 if __name__ == "__main__":
     income = [91000, 93000, 96000, 103000, 112000, 117000]

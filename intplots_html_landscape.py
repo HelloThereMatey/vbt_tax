@@ -404,4 +404,4 @@ if __name__ == "__main__":
 
     #Sample usage:
     # python intplots_html_landscape.py '/Users/jamesbishop/Documents/Financial/Investment/MACRO_STUDIES/TwitterThreadz/hOdLeRs/42_Macro_BackTests.html' --image-scale 0.8 --increase-font 4
-    #python intplots_html_landscape.py '/Users/jamesbishop/Documents/Financial/Investment/MACRO_STUDIES/TwitterThreadz/hOdLeRs/42_Macro_BackTests.html' --image-scale 0.8 --increase-font 3
+    #python intplots_html_landscape.py  "/Users/jamesbishop/Documents/Financial/Investment/MACRO_STUDIES/Proper_Studies/42Macro/BTC_Signals_Backtests/42_Macro_BackTests.html" --image-scale 0.8 --increase-font 3

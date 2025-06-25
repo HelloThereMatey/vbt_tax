@@ -151,7 +151,7 @@ def plot_timeseries_with_vlines(price_series, vline_dict=None, title='Time Serie
     return fig
 
 #FUNCTIONS #########################################################################################################################
-def defaultTaxRates() -> pd.DataFrame:
+def defaultTaxRates() -> tuple:
     print("Using default tax information for Australia from 2019 - 2025.")
     taxRates = pd.read_excel(wd+fdel+"tax_rates.xlsx", index_col=0)
     tax_brackets = {bracket: group for bracket, group in taxRates.groupby('bracket')}
@@ -320,7 +320,8 @@ def tax_calc(trades: pd.DataFrame,
 
 def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud: float,
                     previous_cg_loss: float = 0, deductions: float = 0, tax_rates: pd.DataFrame = None,
-                    constant_cgt_rate: float = None) -> pd.Series:
+                    constant_cgt_discount: float = None,
+                    fixed_cgt_rate: float = None) -> pd.Series:
     """Calculate the tax to pay for a single financial year from CGT and non-CGT income.
     
     **Parameters:**
@@ -356,8 +357,8 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         deferred = pd.DataFrame()
     else:
         # Calculate the cgt_rate based on the duration of the trade, giving 50% discount for trades held longer than 12 months
-        if constant_cgt_rate is not None:
-            year_trades["cgt_rate"] = constant_cgt_rate
+        if constant_cgt_discount is not None:
+            year_trades["cgt_rate"] = constant_cgt_discount
         else:
             year_trades["cgt_rate"] = 1.0
             # Use vectorized operation to avoid SettingWithCopyWarning
@@ -423,7 +424,10 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         
         # Split tax between CGT and non-CGT income
         non_cgt_tax = (income/gross_taxable_income) * total_tax
-        cgt_tax = total_tax - non_cgt_tax
+        if fixed_cgt_rate is not None:  #Adds a variable to force a fixed CGT rate, could apply to super or for top tax bracket etc.
+            cgt_tax = fixed_cgt_rate * cgt_aud
+        else:
+            cgt_tax = total_tax - non_cgt_tax
     
     # Create result series
     result = pd.Series({
@@ -537,7 +541,8 @@ def run_backtest_with_tax(
     deductions: Union[float, list] = 0,
     tax_rates: pd.DataFrame = None,
     freq: str = '1D',
-    special_conditions: dict = {"constant_cgt_rate": None,
+    special_conditions: dict = {"constant_cgt_discount": None,
+                                "fixed_cgt_rate": None,
                                 },
 ) -> vbt.Portfolio:
     """
@@ -766,7 +771,8 @@ def run_backtest_with_tax(
                     previous_cg_loss=pf_data["capital_loss_carryforward"],
                     deductions=year_deductions,
                     tax_rates=tax_rates,
-                    constant_cgt_rate=special_conditions["constant_cgt_rate"]
+                    constant_cgt_discount=special_conditions["constant_cgt_discount"],
+                    fixed_cgt_rate=special_conditions["fixed_cgt_rate"]
                 )
 
                 # Store tax payment

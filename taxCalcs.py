@@ -150,15 +150,100 @@ def plot_timeseries_with_vlines(price_series, vline_dict=None, title='Time Serie
     
     return fig
 
+# Create CPI Deflator Index for Real Value Conversion
+
+def create_cpi_deflator(cpi_data: pd.Series, base_date: str = "2018-03-31")-> pd.Series:
+    """
+    Create a CPI deflator index for converting nominal values to real values.
+    
+    Parameters:
+    -----------
+    cpi_data : pd.Series
+        CPI index values with datetime index
+    base_year : int
+        Base year for the deflator (default: 2018)
+        
+    Returns:
+    --------
+    pd.Series
+        Deflator index where base_year = 1.0
+    """
+
+    # Find the closest date to the specified base_date
+        # Convert the Datestring to a Timestamp object
+    date_ts = pd.to_datetime(base_date)
+    
+    # Ensure all elements in index are Timestamp objects
+    try:
+        index = pd.to_datetime(cpi_data.index)
+    except Exception as e:
+        print(f"Error converting index to datetime: {e}")
+        return None
+
+    # Check for any non-datetime values in the index
+    if not all(isinstance(x, pd.Timestamp) for x in index):
+        print("Index contains non-datetime values.")
+        return None
+    
+    # Find the closest date in the index
+    closest_date = min(index, key=lambda x: abs((x - date_ts).total_seconds()))
+    index_loc = index.get_loc(closest_date)
+
+    base_cpi = cpi_data.iloc[index_loc]
+    print(f"Using closest available date {closest_date} to requested base date {base_date}")
+    # Create deflator: base year = 1.0, other years scale accordingly
+    deflator = base_cpi / cpi_data
+    deflator = pd.Series(deflator.values, index=pd.DatetimeIndex(deflator.index))
+    print(f"CPI Deflator created with base date {base_date}")
+    print(f"Base year CPI value: {base_cpi:.2f}")
+    print(f"Deflator range: {deflator.min():.3f} to {deflator.max():.3f}")
+    
+    return deflator
+
+def deflate_series(nominal_series: pd.Series, deflator: pd.Series, base_year=2018)-> pd.Series:
+    """
+    Convert nominal values to real values using CPI deflator.
+    
+    Parameters:
+    -----------
+    nominal_series : pd.Series
+        Nominal values to be deflated
+    deflator : pd.Series
+        CPI deflator index
+    base_year : int
+        Base year for reference
+        
+    Returns:
+    --------
+    pd.Series
+        Real values in constant base year dollars
+    """
+    
+    # Align the series by reindexing deflator to match nominal_series dates
+    aligned_deflator = deflator.reindex(nominal_series.index, method='ffill')
+    
+    # Convert to real values
+    real_series = nominal_series * aligned_deflator
+    
+    real_series.name = f"{nominal_series.name}_real_{base_year}" if nominal_series.name else f"real_{base_year}"
+    
+    return real_series
+
 #FUNCTIONS #########################################################################################################################
 def defaultTaxRates() -> tuple:
     print("Using default tax information for Australia from 2019 - 2025.")
-    taxRates = pd.read_excel(wd+fdel+"tax_rates.xlsx", index_col=0)
-    tax_brackets = {bracket: group for bracket, group in taxRates.groupby('bracket')}
+    taxRates = pd.read_excel(wd+fdel+"tax_rates_aus.xlsx", index_col=0)
+    
+    # Convert integer year index to DatetimeIndex with June 30th dates (end of financial year)
+    if not isinstance(taxRates.index, pd.DatetimeIndex):
+        # Assume index contains years as integers (2014, 2015, etc.)
+        taxRates.index = pd.to_datetime([str(year)+"-06-30" for year in taxRates.index])
+    
+    tax_brackets = {bracket: group for bracket, group in taxRates.groupby('Bracket')}
 
     return taxRates, tax_brackets
 
-def determine_tax_bracket(gross_income: float, year: int, tax_rates: pd.DataFrame = None, deductions: float = 0) -> str:
+def determine_tax_bracket(gross_income: float, year: int, tax_rates_aus: pd.DataFrame = None, deductions: float = 0) -> str:
     """Determine the tax bracket for a given gross income and year.
 
     **Parameters:**
@@ -176,12 +261,12 @@ def determine_tax_bracket(gross_income: float, year: int, tax_rates: pd.DataFram
     net_income = gross_income - deductions
     bracket_row = tax_rates.loc[
         (tax_rates.index == year) & 
-        (tax_rates["bracket_min_aud"] <= net_income) &
-        ((tax_rates["bracket_max_aud"].isna()) | (net_income <= tax_rates["bracket_max_aud"]))
+        (tax_rates["Bracket minimum (threshold)"] <= net_income) &
+        ((tax_rates["Bracket maximum"].isna()) | (net_income <= tax_rates["Bracket maximum"]))
     ]
     
     if not bracket_row.empty:
-        return bracket_row.iloc[0]["bracket"]
+        return bracket_row.iloc[0]["Bracket"]
     else:
         return "Unknown"
 
@@ -920,7 +1005,7 @@ def backtest_tax_cashflow(price: pd.Series, orders: pd.Series, init_cash: float,
     Run a vbt.Portolio.from_orders backtest of using the cgt_tax_pyments_(usd) series from the run_backtest_with_tax function.
     That function runs a backtest for each financial year with tax payments simulated. We can then use the cgt_tax_payments_(usd) series
     to run a final backtest using that series input to the cashflow parameter of the vbt.Portfolio.from_orders function. This will give us
-    a final porftfolio that has all the stats etc. caluclated and has tax payment simulation built in in an accurate way.
+    a final porftolio that has all the stats etc. caluclated and has tax payment simulation built in in an accurate way.
 
     **Parameters:**
     - price: pd.Series - Price series for the asset being traded
@@ -1007,6 +1092,57 @@ def calculate_performance_stats(equity_curve, periods_per_year=252, target_retur
         'Sortino Ratio': sortino_ratio
     }
 
+def orders_from_signals(signals: pd.Series, max_size: float = 1.0, 
+                        value_map: dict = {0: 0, 0.5: 0.5, 1: 1}) -> pd.Series:
+    """
+    Convert a signals series to orders series.
+    
+    **Parameters:**
+    -----------
+    - signals : pd.Series
+        Series with 1 for buy, -1 for sell, 0 for hold
+    - max_size : float, optional
+        max_size of any order in target percentage of portfolio terms. Default is 1.0.
+    - value_map : dict, optional
+        Mapping of signal values to order sizes. The keys could be strings, e.g "green", "yellow", "red"
+        or numbers that differ from the fraction to replace the value with. The function will look for the 
+        keys in the series and replace them with the values. Default is {0: 0, 0.5: 0.5, 1: 1}. 
+    
+        
+    Returns:
+    --------
+    - orders: pd.Series
+        Orders series with the same index as signals input series & only non-nan values on orders that should occur for a 
+        vbt.Portfolio.from_orders(..) method run.
+    - portfolio_holdings: pd.Series
+        Orders series with the same index as signals input series & shows the potfolio asset holding proportion at each date.
+    """
+    
+    portfolio_holdings = signals.copy()
+    portfolio_holdings = portfolio_holdings.map(value_map)  # Map values according to value_map
+
+    #Orders series that will contain a non-nan value only when a change to the portfolio holdings is made
+    orders = orders_from_holdings(portfolio_holdings, max_size=max_size)
+
+    return orders, portfolio_holdings
+
+def orders_from_holdings(portfolio_holdings: pd.Series, max_size: float = 1.0) -> pd.Series:
+    """
+    Convert a portfolio holdings series to orders series.
+    Takes a portfolio holdings series and converts it to an orders series that can be used in vbt.Portfolio.from_orders(..) method.
+    Turns all values to NaN except for the values when a change in holdings occurs.
+    """
+
+    #Orders series that will contain a non-nan value only when a change to the portfolio holdings is made
+    orders = portfolio_holdings.copy() 
+
+    #Eliminate all values other than a change value (replace with nan)
+    for i in range(len(portfolio_holdings[1:])):
+        if portfolio_holdings.iloc[i] == portfolio_holdings.iloc[i-1]:
+            orders.iloc[i] = np.nan
+        else:
+            pass
+    return orders
 
 if __name__ == "__main__":
     income = [91000, 93000, 96000, 103000, 112000, 117000]

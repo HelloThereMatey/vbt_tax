@@ -255,14 +255,14 @@ def determine_tax_bracket(gross_income: float, year: int, tax_rates_aus: pd.Data
     **Returns:**
     - str - The tax bracket for the given gross income and year.
     """
-    if tax_rates is None:
-        tax_rates = defaultTaxRates()[0] # Get the default tax rates table
+    if tax_rates_aus is None:
+        tax_rates_aus = defaultTaxRates()[0] # Get the default tax rates table
 
     net_income = gross_income - deductions
-    bracket_row = tax_rates.loc[
-        (tax_rates.index == year) & 
-        (tax_rates["Bracket minimum (threshold)"] <= net_income) &
-        ((tax_rates["Bracket maximum"].isna()) | (net_income <= tax_rates["Bracket maximum"]))
+    bracket_row = tax_rates_aus.loc[
+        (tax_rates_aus.index == str(year)+"-06-30") & 
+        (tax_rates_aus["Bracket minimum (threshold)"] <= net_income) &
+        ((tax_rates_aus["Bracket maximum"].isna()) | (net_income <= tax_rates_aus["Bracket maximum"]))
     ]
     
     if not bracket_row.empty:

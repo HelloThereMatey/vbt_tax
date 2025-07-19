@@ -239,12 +239,12 @@ def defaultTaxRates() -> tuple:
         # Assume index contains years as integers (2014, 2015, etc.)
         taxRates.index = pd.to_datetime([str(year)+"-06-30" for year in taxRates.index])
     
-    tax_brackets = {bracket: group for bracket, group in taxRates.groupby('Bracket')}
+    tax_Brackets = {Bracket: group for Bracket, group in taxRates.groupby('Bracket')}
 
-    return taxRates, tax_brackets
+    return taxRates, tax_Brackets
 
-def determine_tax_bracket(gross_income: float, year: int, tax_rates_aus: pd.DataFrame = None, deductions: float = 0) -> str:
-    """Determine the tax bracket for a given gross income and year.
+def determine_tax_Bracket(gross_income: float, year: int, tax_rates_aus: pd.DataFrame = None, deductions: float = 0) -> str:
+    """Determine the tax Bracket for a given gross income and year.
 
     **Parameters:**
     - gross_income: float - The gross income for the financial year.
@@ -253,20 +253,20 @@ def determine_tax_bracket(gross_income: float, year: int, tax_rates_aus: pd.Data
     - deductions: float - Total deductions in AUD.
 
     **Returns:**
-    - str - The tax bracket for the given gross income and year.
+    - str - The tax Bracket for the given gross income and year.
     """
     if tax_rates_aus is None:
         tax_rates_aus = defaultTaxRates()[0] # Get the default tax rates table
 
     net_income = gross_income - deductions
-    bracket_row = tax_rates_aus.loc[
+    Bracket_row = tax_rates_aus.loc[
         (tax_rates_aus.index == str(year)+"-06-30") & 
         (tax_rates_aus["Bracket minimum (threshold)"] <= net_income) &
         ((tax_rates_aus["Bracket maximum"].isna()) | (net_income <= tax_rates_aus["Bracket maximum"]))
     ]
     
-    if not bracket_row.empty:
-        return bracket_row.iloc[0]["Bracket"]
+    if not Bracket_row.empty:
+        return Bracket_row.iloc[0]["Bracket"]
     else:
         return "Unknown"
 
@@ -342,7 +342,7 @@ def tax_calc(trades: pd.DataFrame,
     - income: float or pd.Series. If float then the same income is applied to all financial years. If pd.Series then the income is applied to the corresponding financial year.
     - deductions: float or pd.Series, optional default is None. If float then the same deductions are applied to all financial years. If pd.Series then the deductions are applied 
     to the corresponding financial year. If None then the deductions are set to 0.
-    - tax_rates: pd.DataFrame - This is the tax rates information dataframe. Has columns: ["bracket", "tax_rate_(%)",	"base_tax_aud",	"bracket_min_aud",	"bracket_max_aud"] 
+    - tax_rates: pd.DataFrame - This is the tax rates information dataframe. Has columns: ["Bracket", "Tax Rate - above threshold (%)",	"Base Tax",	"Bracket minimum (threshold)",	"Bracket maximum"] 
     and index is the financial year in format of YYYY-YY e.g "2020-21". We could later generalize this to work with non-Australian tax rates.
 
     **Returns:**
@@ -368,13 +368,13 @@ def tax_calc(trades: pd.DataFrame,
     fy_totals["gross_deductions_(AUD)"] = pd.Series(deductions, index = fy_totals.index)
     fy_totals["net_taxable_income_(AUD)"] = fy_totals["gross_taxable_income_(AUD)"] - fy_totals["gross_deductions_(AUD)"]
 
-    #Figure out the applicable tax bracket for each financial year
-    fy_totals["tax_bracket"] = fy_totals.apply(
+    #Figure out the applicable tax Bracket for each financial year
+    fy_totals["tax_Bracket"] = fy_totals.apply(
     lambda row: tax_rates.loc[
         (tax_rates.index == row.name) &  # Match the financial year
-        (tax_rates["bracket_min_aud"] <= row["net_taxable_income_(AUD)"]) &  # Income is above bracket minimum
-        ((tax_rates["bracket_max_aud"].isna()) |  # Either no upper limit (for highest bracket)
-         (row["net_taxable_income_(AUD)"] <= tax_rates["bracket_max_aud"]))]["bracket"].iloc[0], axis=1)
+        (tax_rates["Bracket minimum (threshold)"] <= row["net_taxable_income_(AUD)"]) &  # Income is above Bracket minimum
+        ((tax_rates["Bracket maximum"].isna()) |  # Either no upper limit (for highest Bracket)
+         (row["net_taxable_income_(AUD)"] <= tax_rates["Bracket maximum"]))]["Bracket"].iloc[0], axis=1)
     
     # Figure out the payable tax for each financial year
     payable = []; taxcomps = []
@@ -386,12 +386,12 @@ def tax_calc(trades: pd.DataFrame,
 
     for i in range(len(fy_totals)):
         fy = fy_totals.index[i]
-        row = tax_rates.loc[(tax_rates.index == fy) & (tax_rates["bracket"] == fy_totals.loc[fy, "tax_bracket"])]
-        bt = row.loc[fy, "base_tax_aud"]
-        rate = row.loc[fy, "tax_rate_(%)"]
-        brackmin = row.loc[fy, "bracket_min_aud"]
+        row = tax_rates.loc[(tax_rates.index == fy) & (tax_rates["Bracket"] == fy_totals.loc[fy, "tax_Bracket"])]
+        bt = row.loc[fy, "Base Tax"]
+        rate = row.loc[fy, "Tax Rate - above threshold (%)"]
+        brackmin = row.loc[fy, "Bracket minimum (threshold)"]
         taxable = fy_totals.loc[fy, "net_taxable_income_(AUD)"]
-        #print(f"FY: {fy}, taxable: {taxable}, bracket minimum: {brackmin}, rate: {rate}, bt: {bt}")
+        #print(f"FY: {fy}, taxable: {taxable}, Bracket minimum: {brackmin}, rate: {rate}, bt: {bt}")
         tax = bt + (taxable - brackmin) * (rate/100)
         non_cgt = (inco[i]/taxable)*tax
         cgt = tax - non_cgt
@@ -473,19 +473,19 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         gross_taxable_income = income
         net_taxable_income = gross_taxable_income - deductions
         
-        # Find applicable tax bracket
-        bracket_row = tax_rates.loc[
-            (tax_rates.index == year) & 
-            (tax_rates["bracket_min_aud"] <= net_taxable_income) &
-            ((tax_rates["bracket_max_aud"].isna()) | (net_taxable_income <= tax_rates["bracket_max_aud"]))
+        # Find applicable tax Bracket
+        Bracket_row = tax_rates.loc[
+            (tax_rates.index == str(year)+"-06-30") & 
+            (tax_rates["Bracket minimum (threshold)"] <= net_taxable_income) &
+            ((tax_rates["Bracket maximum"].isna()) | (net_taxable_income <= tax_rates["Bracket maximum"]))
         ].iloc[0]
         
         # Calculate tax
-        base_tax = bracket_row["base_tax_aud"]
-        tax_rate = bracket_row["tax_rate_(%)"]
-        bracket_min = bracket_row["bracket_min_aud"]
+        base_tax = Bracket_row["Base Tax"]
+        tax_rate = Bracket_row["Tax Rate - above threshold (%)"]
+        Bracket_min = Bracket_row["Bracket minimum (threshold)"]
         
-        total_tax = base_tax + (net_taxable_income - bracket_min) * (tax_rate/100)
+        total_tax = base_tax + (net_taxable_income - Bracket_min) * (tax_rate/100)
         non_cgt_tax = total_tax  # All tax is from non-CGT income
     else:
         # Calculate total taxable income
@@ -493,23 +493,23 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         gross_taxable_income = income + cgt_aud
         net_taxable_income = gross_taxable_income - deductions
         
-        # Find applicable tax bracket
-        bracket_row = tax_rates.loc[
-            (tax_rates.index == year) & 
-            (tax_rates["bracket_min_aud"] <= net_taxable_income) &
-            ((tax_rates["bracket_max_aud"].isna()) | (net_taxable_income <= tax_rates["bracket_max_aud"]))
+        # Find applicable tax Bracket
+        Bracket_row = tax_rates.loc[
+            (tax_rates.index == str(year)+"-06-30") & 
+            (tax_rates["Bracket minimum (threshold)"] <= net_taxable_income) &
+            ((tax_rates["Bracket maximum"].isna()) | (net_taxable_income <= tax_rates["Bracket maximum"]))
         ].iloc[0]
         
         # Calculate tax
-        base_tax = bracket_row["base_tax_aud"]
-        tax_rate = bracket_row["tax_rate_(%)"]
-        bracket_min = bracket_row["bracket_min_aud"]
+        base_tax = Bracket_row["Base Tax"]
+        tax_rate = Bracket_row["Tax Rate - above threshold (%)"]
+        Bracket_min = Bracket_row["Bracket minimum (threshold)"]
         
-        total_tax = base_tax + (net_taxable_income - bracket_min) * (tax_rate/100)
+        total_tax = base_tax + (net_taxable_income - Bracket_min) * (tax_rate/100)
         
         # Split tax between CGT and non-CGT income
         non_cgt_tax = (income/gross_taxable_income) * total_tax
-        if fixed_cgt_rate is not None:  #Adds a variable to force a fixed CGT rate, could apply to super or for top tax bracket etc.
+        if fixed_cgt_rate is not None:  #Adds a variable to force a fixed CGT rate, could apply to super or for top tax Bracket etc.
             cgt_tax = fixed_cgt_rate * cgt_aud
         else:
             cgt_tax = total_tax - non_cgt_tax
@@ -522,10 +522,10 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         "gross_taxable_income_(AUD)": gross_taxable_income,
         "gross_deductions_(AUD)": deductions,
         "net_taxable_income_(AUD)": net_taxable_income,
-        "tax_bracket": bracket_row["bracket"],
-        "bracket_min_(aud)": bracket_row["bracket_min_aud"],
+        "tax_Bracket": Bracket_row["Bracket"],
+        "Bracket_min_(aud)": Bracket_row["Bracket minimum (threshold)"],
         "base_tax_(aud)": base_tax,
-        "tax_rate_(%)": tax_rate,
+        "Tax Rate - above threshold (%)": tax_rate,
         "total_tax_aud": total_tax,
         "taxed_(% of gross income)": (total_tax / gross_taxable_income) * 100,
         "non_cgt_tax_(aud)": non_cgt_tax,
@@ -684,7 +684,9 @@ def run_backtest_with_tax(
     aud = aud[common_dates]
     
     # Get unique years in the data
-    years = price.index.year.unique()
+    # Get unique financial years in the data
+    years = np.unique([date.year for date in price.index])
+
     #income and deductions are lists of length years
     if isinstance(income, list):
             income_series = pd.Series(income, index=years)

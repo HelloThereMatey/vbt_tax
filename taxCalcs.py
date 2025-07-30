@@ -231,7 +231,7 @@ def deflate_series(nominal_series: pd.Series, deflator: pd.Series, base_year=201
 
 #FUNCTIONS #########################################################################################################################
 def defaultTaxRates() -> tuple:
-    print("Using default tax information for Australia from 2019 - 2025.")
+    print("Using default tax information for Australia from 1984 - 2025.")
     taxRates = pd.read_excel(wd+fdel+"tax_rates_aus.xlsx", index_col=0)
     
     # Convert integer year index to DatetimeIndex with June 30th dates (end of financial year)
@@ -259,14 +259,15 @@ def determine_tax_Bracket(gross_income: float, year: int, tax_rates_aus: pd.Data
         tax_rates_aus = defaultTaxRates()[0] # Get the default tax rates table
 
     net_income = gross_income - deductions
-    Bracket_row = tax_rates_aus.loc[
-        (tax_rates_aus.index == str(year)+"-06-30") & 
-        (tax_rates_aus["Bracket minimum (threshold)"] <= net_income) &
-        ((tax_rates_aus["Bracket maximum"].isna()) | (net_income <= tax_rates_aus["Bracket maximum"]))
-    ]
-    
-    if not Bracket_row.empty:
-        return Bracket_row.iloc[0]["Bracket"]
+    year_string = str(year) + "-06-30"
+    year_tax_rates = tax_rates_aus[tax_rates_aus.index == year_string]
+
+    filtered = year_tax_rates[year_tax_rates["Bracket minimum (threshold)"] <= net_income] 
+    filtered = filtered[(filtered["Bracket maximum"].isna()) | 
+        (net_income <= filtered["Bracket maximum"])]
+
+    if not filtered.empty:
+        return filtered.iloc[0]["Bracket"]
     else:
         return "Unknown"
 
@@ -434,12 +435,15 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
 
     if tax_rates is None:
         tax_rates = defaultTaxRates()[0]  # Get the default tax rates table
+    year_timestamp = pd.Timestamp(str(year) + "-06-30")
+    year_tax_rates = tax_rates[tax_rates.index == year_timestamp]
 
     # Calculate CGT amount from trades
     if year_trades.empty:
         cgt_aud = 0
         capital_loss_carryforward = previous_cg_loss
         deferred = pd.DataFrame()
+        year_toPay = pd.DataFrame([0], columns = ["pnl_(AUD)"])  # No trades to pay CGT for this year
     else:
         # Calculate the cgt_rate based on the duration of the trade, giving 50% discount for trades held longer than 12 months
         if constant_cgt_discount is not None:
@@ -474,12 +478,9 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         net_taxable_income = gross_taxable_income - deductions
         
         # Find applicable tax Bracket
-        Bracket_row = tax_rates.loc[
-            (tax_rates.index == str(year)+"-06-30") & 
-            (tax_rates["Bracket minimum (threshold)"] <= net_taxable_income) &
-            ((tax_rates["Bracket maximum"].isna()) | (net_taxable_income <= tax_rates["Bracket maximum"]))
-        ].iloc[0]
-        
+        bracket = determine_tax_Bracket(net_taxable_income, year, tax_rates)
+        Bracket_row = year_tax_rates[year_tax_rates["Bracket"] == bracket].iloc[0]
+
         # Calculate tax
         base_tax = Bracket_row["Base Tax"]
         tax_rate = Bracket_row["Tax Rate - above threshold (%)"]
@@ -494,11 +495,8 @@ def single_year_tax(year: int, income: float, year_trades: pd.DataFrame, usdaud:
         net_taxable_income = gross_taxable_income - deductions
         
         # Find applicable tax Bracket
-        Bracket_row = tax_rates.loc[
-            (tax_rates.index == str(year)+"-06-30") & 
-            (tax_rates["Bracket minimum (threshold)"] <= net_taxable_income) &
-            ((tax_rates["Bracket maximum"].isna()) | (net_taxable_income <= tax_rates["Bracket maximum"]))
-        ].iloc[0]
+        bracket = determine_tax_Bracket(net_taxable_income, year, tax_rates)
+        Bracket_row = year_tax_rates[year_tax_rates["Bracket"] == bracket].iloc[0]
         
         # Calculate tax
         base_tax = Bracket_row["Base Tax"]
@@ -624,6 +622,7 @@ def run_backtest_with_tax(
     income: Union[float, list],
     trading_fees: float = 0.0,
     deductions: Union[float, list] = 0,
+    fixed_costs: Union[float, list] = 0,  # New parameter
     tax_rates: pd.DataFrame = None,
     freq: str = '1D',
     special_conditions: dict = {"constant_cgt_discount": None,
@@ -649,18 +648,16 @@ def run_backtest_with_tax(
     deductions : Union[float, list], optional
         Annual deductions for tax calculations. If float, same deductions for all years.
         If list, deductions for each year in order. Default is 0.
+    fixed_costs : Union[float, list], optional
+        Annual fixed costs in USD (e.g., research subscription fees) to be subtracted from portfolio value.
+        If float, same fixed costs for all years. If list, fixed costs for each year in order. Default is 0.
     tax_rates : pd.DataFrame, optional
         Tax rates to use. If None, uses default Australian tax rates.
     freq : str, optional
         Frequency of the data. Default is '1D'.
-    exit_at_end : bool, optional
-        If True, exit all positions at the end of the backtest. Default is False.
-    pay_final_tax_at_end : bool, optional
-        If True, pay the tax for the final year at the end of the backtest. Default is False.
 
     special_conditions : dict, optional
-        Dictionary of special conditions for the backtest. Keyword arguments, can be:
-        - "
+        Dictionary of special conditions for the backtest.
 
     Returns
     -------
@@ -685,17 +682,31 @@ def run_backtest_with_tax(
     
     # Get unique years in the data
     # Get unique financial years in the data
-    years = np.unique([date.year for date in price.index])
+    years = [int(date.year) for date in price.index]
+    years = sorted(list(set(years)))  # Get unique years and sort them
+    if price.index[-1].month > 6:
+        years.append(price.index[-1].year + 1)  #Add another year to the list of FYs if there is some months after the recent tax day.
 
+    print(f"Financial years in data: {years}")
     #income and deductions are lists of length years
     if isinstance(income, list):
-            income_series = pd.Series(income, index=years)
+            income_series = pd.Series(income)
+            income_series = income_series.reindex(years).fillna(1)
+    elif isinstance(income, pd.Series):
+        # If income is a Series, ensure it has the correct index
+        income_series = income
+        income_series = income_series.reindex(years).fillna(1)
     else:
         income_series = pd.Series([income for _ in range(len(years))], index=years)
     if isinstance(deductions, list):
         deductions_series = pd.Series(deductions, index=years)
     else:
         deductions_series = pd.Series([deductions for _ in range(len(years))], index=years)
+        # Process fixed_costs parameter similar to deductions
+    if isinstance(fixed_costs, list):
+        fixed_costs_series = pd.Series(fixed_costs, index=years)
+    else:
+        fixed_costs_series = pd.Series([fixed_costs for _ in range(len(years))], index=years)
 
     # Initialize portfolio tracking dictionaries
     portfolios = {
@@ -725,11 +736,13 @@ def run_backtest_with_tax(
             "tax_details": pd.Series(),
             "tax_payments_(aud)": pd.Series(0, index=years, dtype=float),
             "tax_payments_(usd)": pd.Series(0, index=years, dtype=float),
+            "fixed_costs_(aud)": pd.Series(0, index=years, dtype=float),
+            "fixed_costs_(usd)": pd.Series(0, index=years, dtype=float),
             "capital_loss_carryforward": 0
         }
     }
 
-    fys = []
+    fys = {}
     print(f"Backtest price data runs from: {price.index[0]} to {price.index[-1]}, years: {years}")
 
     for i, year in enumerate(years):
@@ -743,30 +756,26 @@ def run_backtest_with_tax(
                 start_date = pd.Timestamp(f"{year}-07-01")
                 end_date = pd.Timestamp(f"{year+1}-06-30")    
         elif i == len(years)-1:  # Last year
-            if price.index[-1].month > 6:
-                # If ends after June, use from June 30th to end
-                start_date = pd.Timestamp(f"{year}-06-30")
-                end_date = price.index[-1]
-            else:
-                # If ends before July, use from June 30th previous year to end
-                start_date = pd.Timestamp(f"{year-1}-06-30")
-                end_date = price.index[-1]
-        else:  # Middle years
+            # If ends before July, use from June 30th previous year to end
+            start_date = pd.Timestamp(f"{year-1}-06-30")
+            end_date = price.index[-1]
+        else:  # Middle yearsRunning backtest for financial year:
             # Full financial year from June 30th to June 30th
             start_date = pd.Timestamp(f"{year-1}-06-30")
             end_date = pd.Timestamp(f"{year}-06-30")
             
         # Get the date range and append to fys
         year_mask = (price.index >= start_date) & (price.index <= end_date)
-        fys.append(price.index[year_mask])
-        print(f"For financial year: {year}\nStart date: {fys[i][0]}\nEnd date: {fys[i][-1]}")
-    
+        fys[year] = price.index[year_mask]
+        print(f"For financial year: {year}\nStart date: {fys[year][0]}\nEnd date: {fys[year][-1]}")
+
     # Run backtest for each year
     deferred = pd.DataFrame()  # Placeholder for deferred tax
-    for i, fy in enumerate(fys):
+    year_list = list(fys.keys())  # Convert to list for proper indexing
+    for i, year in enumerate(year_list):
+        fy = fys[year]
         # Get data for this year
         year_aud = aud[fy]
-        year = fy[-1].year
         year_price = price[fy]
         year_orders = orders[fy]  # Fill NaN values with 0 (hold)
 
@@ -823,25 +832,34 @@ def run_backtest_with_tax(
             pf_data["raw_trades"] = pd.concat([pf_data["raw_trades"], trades_df], axis = 0)
 
             print(f"After backtest, {pf_type} - Current cash: {pf_data['current_cash']}, current assets: {pf_data['current_assets']}, current value: {pf_data['end_value']}")
+            
+            # Debug the condition check
+            has_assets = pf_data["current_assets"] > 0.000000001
+            has_next_year = i < len(year_list) - 1
+            print(f"{pf_type} - Has assets: {has_assets} (assets: {pf_data['current_assets']}), Has next year: {has_next_year}")
+            
             # If we have assets and there's a next year, prepare order for start of next year
-            if i < len(fys) - 1 and pf_data["current_assets"] > 0.000000001:
-
+            if has_next_year and has_assets:
                 #Calculate target percentage for next year
-                next_year_start = fys[i+1][0]
+                next_year = year_list[i + 1]
+                next_year_start = fys[next_year][0]
                 # Calculate portfolio value at start of next year
                 next_year_start_price = price.loc[next_year_start]
                 portfolio_value_at_start = pf_data["current_cash"] + (pf_data["current_assets"] * next_year_start_price)
                 
                 # Calculate what percentage of portfolio value would give us the same number of assets
                 target_percent = (pf_data["current_assets"] * next_year_start_price) / portfolio_value_at_start
-                print(f"{pf_type} - Target percent for day 1 of year {year+1} order: {target_percent}")
+                print(f"{pf_type} - Target percent for day 1 of year {next_year} order: {target_percent}")
                 
                 # Store the target percentage order for the first day of next year
                 pf_data["order_at_start_of_year"] = target_percent
             else:
-                # Reset order_at_start_of_year if we have no assets
+                # Reset order_at_start_of_year if we have no assets or no next year
                 pf_data["order_at_start_of_year"] = np.nan
-                print(f"{pf_type} - No assets at end of year {year}, no order will be placed at start of next FY")
+                if not has_next_year:
+                    print(f"{pf_type} - End of data reached, no next financial year")
+                elif not has_assets:
+                    print(f"{pf_type} - No assets at end of year {year}, no order will be placed at start of next FY")
             
             # For the taxed portfolio, handle tax calculations
             if pf_type == "taxed_pf":
@@ -850,6 +868,7 @@ def run_backtest_with_tax(
                 
                 # Calculate tax
                 year_income = income_series.loc[year]
+                print(f"Calculating tax for year {year} with income\n {year_income}\n AUD and deductions {year_deductions} AUD")
                 
                 tax_result, deferred, trades_df = single_year_tax(year,
                     year_income,
@@ -862,12 +881,27 @@ def run_backtest_with_tax(
                     fixed_cgt_rate=special_conditions["fixed_cgt_rate"]
                 )
 
-                # Store tax payment
-                pf_data["tax_details"] = pd.concat([pf_data["tax_details"], tax_result.rename(year)], axis=1)
+                # Get fixed costs for this year, fixed costs must be specified in USD rather than AUD.
+                year_fixed_costs = fixed_costs_series.loc[year] # Add fixed costs to the tax calculation
+
                 pf_data["tax_payments_(aud)"].loc[year] = tax_result['cgt_tax_(aud)']
-                cgt_tax_usd = tax_result['cgt_tax_(aud)'] / year_aud.iloc[-1]
+                cgt_tax_usd = tax_result['cgt_tax_(aud)'] / year_end_aud
+                print(f"CGT tax for year {year} in AUD: {tax_result['cgt_tax_(aud)']}, in USD: {cgt_tax_usd}")
+                # Add fixed costs to total costs that need to be paid
+                cgt_tax_usd += year_fixed_costs
+                print("After adding the fixed costs, the total CGT USD tax to be paid is: ", cgt_tax_usd)
                 pf_data["tax_payments_(usd)"].loc[year] = cgt_tax_usd
-                
+                # And in the tax calculation section, store the fixed costs:
+                pf_data["fixed_costs_(aud)"].loc[year] = year_fixed_costs / year_end_aud
+                pf_data["fixed_costs_(usd)"].loc[year] = year_fixed_costs
+                # Store tax payment
+                tax_result = pd.concat([tax_result, pd.Series({
+                    "fixed_costs_(aud)": year_fixed_costs / year_end_aud,
+                    "fixed_costs_(usd)": year_fixed_costs,
+                    "total_subtracted_from_portfolio_(usd)": cgt_tax_usd
+                })], axis=0)
+                pf_data["tax_details"] = pd.concat([pf_data["tax_details"], tax_result.rename(year)], axis=1)
+
                 # Update capital loss carryforward for next year from tax_result
                 next_year_capital_loss = tax_result['capital_loss_carryforward_(AUD)']
                 pf_data["capital_loss_carryforward"] = next_year_capital_loss
@@ -925,8 +959,8 @@ def run_backtest_with_tax(
     # Combine all year's portfolio values into one series for each portfolio
     for pf_type in ["pf", "taxed_pf"]:
         pf_data = portfolios[pf_type]
-        for i, year in enumerate(years):
-            year_mask = (price.index >= fys[i][0]) & (price.index <= fys[i][-1])
+        for year in fys.keys():
+            year_mask = (price.index >= fys[year][0]) & (price.index <= fys[year][-1])
             if year in pf_data["values_by_year"]:
                 pf_data["portfolio_value"].loc[year_mask] = pf_data["values_by_year"][year]
         
@@ -992,6 +1026,8 @@ def run_backtest_with_tax(
             "tax_details": portfolios["taxed_pf"]["tax_details"].drop(0, axis = 1),
             "tax_payments_(aud)": portfolios["taxed_pf"]["tax_payments_(aud)"],
             "tax_payments_(usd)": portfolios["taxed_pf"]["tax_payments_(usd)"],
+            "fixed_costs_(aud)": portfolios["taxed_pf"]["fixed_costs_(aud)"],
+            "fixed_costs_(usd)": portfolios["taxed_pf"]["fixed_costs_(usd)"],
             "stats": pd.Series(taxed_stats)
         }
     }
@@ -1054,7 +1090,7 @@ def calculate_performance_stats(equity_curve, periods_per_year=252, target_retur
     # Profit Factor
     gross_profit = winning_returns.sum() if len(winning_returns) > 0 else 0
     gross_loss = abs(losing_returns.sum()) if len(losing_returns) > 0 else 0
-    profit_factor = gross_profit / gross_loss if gross_loss != 0 else np.inf
+    profit_factor = gross_profit / gross_loss if gross_loss != 0 else float('nan')
     
     # Expectancy (average return per trade)
     expectancy = mean_return
@@ -1135,7 +1171,7 @@ def orders_from_holdings(portfolio_holdings: pd.Series, max_size: float = 1.0) -
     Turns all values to NaN except for the values when a change in holdings occurs.
     """
 
-    #Orders series that will contain a non-nan value only when a change to the portfolio holdings is made
+    #Orders series that will contain a non-nan value only when a change in holdings is made
     orders = portfolio_holdings.copy() 
 
     #Eliminate all values other than a change value (replace with nan)
@@ -1147,11 +1183,31 @@ def orders_from_holdings(portfolio_holdings: pd.Series, max_size: float = 1.0) -
     return orders
 
 if __name__ == "__main__":
-    income = [91000, 93000, 96000, 103000, 112000, 117000]
-    cgt_list = [1.0, 0.5, 1.0, 1.0, 1.0, 1.0]
-    deductions = [3500, 4200, 2200, 5000, 6000, 7500]
+    # income = [91000, 93000, 96000, 103000, 112000, 117000]
+    # cgt_list = [1.0, 0.5, 1.0, 1.0, 1.0, 1.0]
+    # deductions = [3500, 4200, 2200, 5000, 6000, 7500]
 
-    
+    ## DEFINE SIMULATION PARAMETERS FOR EACH EXECUTION STRATEGY
+    data = pd.read_excel("/Users/jamesbishop/Documents/Financial/Investment/MACRO_STUDIES/Proper_Studies/Capriole/capriole_data.xlsx", index_col=0) 
+
+    #This is the number of financial years for which the backtests are conducted.
+    tax_years = int(np.ceil((data.index[-1] - data.index[0]).days / 365))
+    print(f"Number of financial years in the data: {tax_years}.")
+    base_salary_hi = 180001 # Made net income of $1 over the top threshold in 2017.
+    growth_rate = 0.025 # 2.5% annual wage growth
+    salaries = pd.Series(np.array([base_salary_hi * (1 + growth_rate)**i for i in range(tax_years)]),
+                                index = [2017 + i for i in range(tax_years)], name = "Net income (AUD)").round().astype(int)
+
+    print("Income over those nine years:\n", salaries)
+    init_cash = 10000  # Initial cash for the backtest
+    trading_fees = 0.005  # 0.5% trading fees
+
+    pf2, pf2tax, details2 = run_backtest_with_tax(data["Close"], data["orders"], data['AUDUSD'], init_cash, salaries)
+    print(f"Final portfolio value without tax: {pf2.stats()['End Value']:.2f} USD")
+    print(f"Final portfolio value with tax: {pf2tax.stats()['End Value']:.2f} USD")
+    print("Total tax paid: \n", details2['taxed']['tax_details'])
+
+
     # # Example usage
     # pf_with_tax = run_backtest_with_tax(
     #     price=data['BTCUSD'],
